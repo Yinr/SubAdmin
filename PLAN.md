@@ -15,6 +15,13 @@
 - Add connection test for each site.
 - Add site switching in the UI.
 
+Status:
+
+- Backend site CRUD APIs added.
+- Site admin keys are encrypted before storage.
+- Site connectivity test API added.
+- UI site switching is still pending.
+
 ## Phase 2: Account Listing
 - List upstream accounts for the selected site.
 - Add filtering by group, status, schedule, proxy, priority, rate, last used, and expiry.

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +15,8 @@ import (
 	"subadmin/internal/auth"
 	"subadmin/internal/config"
 	"subadmin/internal/db"
+	"subadmin/internal/secretbox"
+	"subadmin/internal/sites"
 )
 
 func main() {
@@ -28,6 +32,14 @@ func main() {
 	}
 	defer store.Close()
 	authManager := auth.NewManager(store.DB(), cfg)
+	var siteService *sites.Service
+	if cfg.SecretKey != "" {
+		box, err := secretbox.New(cfg.SecretKey)
+		if err != nil {
+			log.Fatalf("init secret box: %v", err)
+		}
+		siteService = sites.NewService(store.DB(), box)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -94,6 +106,98 @@ func main() {
 			"expiresAt":     session.ExpiresAt.Format(time.RFC3339),
 		})
 	})
+	mux.HandleFunc("/api/sites", func(w http.ResponseWriter, r *http.Request) {
+		if !requireAuth(w, r, authManager) {
+			return
+		}
+		if siteService == nil {
+			writeError(w, http.StatusServiceUnavailable, "SUBADMIN_SECRET_KEY is required for site management")
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			items, err := siteService.List(r.Context())
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "list sites failed")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"items": items})
+		case http.MethodPost:
+			var input sites.CreateInput
+			if err := sites.DecodeJSON(r, &input); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid json body")
+				return
+			}
+			item, err := siteService.Create(r.Context(), input)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusCreated, item)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
+	mux.HandleFunc("/api/sites/", func(w http.ResponseWriter, r *http.Request) {
+		if !requireAuth(w, r, authManager) {
+			return
+		}
+		if siteService == nil {
+			writeError(w, http.StatusServiceUnavailable, "SUBADMIN_SECRET_KEY is required for site management")
+			return
+		}
+		id, action, ok := sites.IDFromPath(r.URL.Path, "/api/sites")
+		if !ok {
+			writeError(w, http.StatusNotFound, "site not found")
+			return
+		}
+		if action == "test" {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			result, err := siteService.Test(r.Context(), id)
+			if err != nil {
+				writeSiteError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, result)
+			return
+		}
+		if action != "" {
+			writeError(w, http.StatusNotFound, "site action not found")
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			item, err := siteService.Get(r.Context(), id)
+			if err != nil {
+				writeSiteError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, item)
+		case http.MethodPatch:
+			var input sites.UpdateInput
+			if err := sites.DecodeJSON(r, &input); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid json body")
+				return
+			}
+			item, err := siteService.Update(r.Context(), id, input)
+			if err != nil {
+				writeSiteError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, item)
+		case http.MethodDelete:
+			if err := siteService.Delete(r.Context(), id); err != nil {
+				writeSiteError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	})
 
 	addr := cfg.Addr
 	log.Printf("subAdmin listening on %s", addr)
@@ -110,6 +214,26 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{"error": message})
+}
+
+func requireAuth(w http.ResponseWriter, r *http.Request, manager *auth.Manager) bool {
+	if _, err := manager.Current(r); err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return false
+		}
+		writeError(w, http.StatusInternalServerError, "session check failed")
+		return false
+	}
+	return true
+}
+
+func writeSiteError(w http.ResponseWriter, err error) {
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "site not found")
+		return
+	}
+	writeError(w, http.StatusBadRequest, err.Error())
 }
 
 func shellPage() string {

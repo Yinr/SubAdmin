@@ -7,13 +7,14 @@ import (
 )
 
 type Config struct {
-	Addr        string
-	DBPath      string
-	LoginSecret string
-	BasePath    string
-	CookiePath  string
+	Addr         string
+	DBPath       string
+	LoginSecret  string
+	SecretKey    string
+	BasePath     string
+	CookiePath   string
 	CookieSecure bool
-	SessionTTL  time.Duration
+	SessionTTL   time.Duration
 }
 
 func Load() Config {
@@ -47,6 +48,7 @@ func Load() Config {
 		Addr:         addr,
 		DBPath:       dbPath,
 		LoginSecret:  os.Getenv("SUBADMIN_LOGIN_SECRET"),
+		SecretKey:    os.Getenv("SUBADMIN_SECRET_KEY"),
 		BasePath:     basePath,
 		CookiePath:   basePath,
 		CookieSecure: cookieSecure,

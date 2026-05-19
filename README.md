@@ -75,6 +75,7 @@ subAdmin/
 | `SUBADMIN_ADDR` | `127.0.0.1:8787` | SubAdmin 后端监听地址 |
 | `SUBADMIN_DB_PATH` | `../data/subadmin.db` | SQLite 数据库路径 |
 | `SUBADMIN_LOGIN_SECRET` | 空 | 登录管理密钥，生产环境必须设置 |
+| `SUBADMIN_SECRET_KEY` | 空 | 敏感数据加密密钥，站点管理功能需要设置 |
 | `SUBADMIN_BASE_PATH` | `/` | 应用对外基础路径，也用于 Session Cookie Path |
 | `SUBADMIN_COOKIE_SECURE` | `true` | 是否只允许安全连接携带 Cookie |
 | `SUBADMIN_SESSION_TTL` | `24h` | Session 有效期 |
