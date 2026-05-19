@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -245,6 +246,36 @@ func (s *Service) Test(ctx context.Context, id int64) (map[string]any, error) {
 	}
 	_, _ = s.db.ExecContext(ctx, `UPDATE sites SET last_check_at = ?, last_check_status = ?, updated_at = ? WHERE id = ?`, now, status, now, id)
 	return result, nil
+}
+
+func (s *Service) AdminGET(ctx context.Context, id int64, path string, query url.Values) (json.RawMessage, int, error) {
+	stored, err := s.getStored(ctx, id)
+	if err != nil {
+		return nil, 0, err
+	}
+	adminKey, err := s.box.Decrypt(stored.AdminKeyCiphertext)
+	if err != nil {
+		return nil, 0, err
+	}
+	endpoint := strings.TrimRight(stored.BaseURL, "/") + path
+	if len(query) > 0 {
+		endpoint += "?" + query.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("x-api-key", adminKey)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return json.RawMessage(body), resp.StatusCode, nil
 }
 
 type storedSite struct {

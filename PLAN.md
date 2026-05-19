@@ -28,6 +28,12 @@ Status:
 - Add text search for name and note.
 - Add pagination and account detail view.
 
+Status:
+
+- Backend account-list proxy added for each site.
+- Minimal account query UI added with search, platform, and status fields.
+- Advanced filters and pagination controls are still pending.
+
 ## Phase 3: Import Workflow
 - Accept uploads of sub2api-supported upstream account formats.
 - Parse and preview imported data before commit.

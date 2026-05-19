@@ -164,6 +164,22 @@ func main() {
 			writeJSON(w, http.StatusOK, result)
 			return
 		}
+		if action == "accounts" {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			query := r.URL.Query()
+			data, statusCode, err := siteService.AdminGET(r.Context(), id, "/api/v1/admin/accounts", query)
+			if err != nil {
+				writeSiteError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(statusCode)
+			_, _ = w.Write(data)
+			return
+		}
 		if action != "" {
 			writeError(w, http.StatusNotFound, "site action not found")
 			return
@@ -393,6 +409,17 @@ func shellPage() string {
       display: grid;
       gap: 12px;
     }
+    .account-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .account-item {
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.52);
+    }
     .site-item {
       padding: 14px;
       border: 1px solid var(--border);
@@ -468,6 +495,22 @@ func shellPage() string {
             <h2>已配置站点</h2>
             <div id="site-list" class="site-list"><p class="muted">尚未加载站点。</p></div>
           </article>
+          <article class="card">
+            <h2>上游账号</h2>
+            <form id="account-filter-form">
+              <div class="row">
+                <label>站点 ID<input name="siteId" placeholder="先点击站点的查看账号" /></label>
+                <label>搜索<input name="search" placeholder="名称、备注或标识" /></label>
+                <label>平台<input name="platform" placeholder="例如 openai / claude / gemini" /></label>
+                <label>状态<input name="status" placeholder="例如 active" /></label>
+              </div>
+              <div class="toolbar">
+                <button type="submit">查询账号</button>
+              </div>
+              <p id="account-error" class="error hidden"></p>
+            </form>
+            <div id="account-list" class="account-list"><p class="muted">请选择一个站点并查询账号。</p></div>
+          </article>
         </section>
       </div>
     </section>
@@ -494,6 +537,9 @@ func shellPage() string {
     const refreshSitesButton = document.querySelector('#refresh-sites');
     const loginError = document.querySelector('#login-error');
     const siteError = document.querySelector('#site-error');
+    const accountFilterForm = document.querySelector('#account-filter-form');
+    const accountError = document.querySelector('#account-error');
+    const accountList = document.querySelector('#account-list');
     const consolePanel = document.querySelector('#console');
     const expires = document.querySelector('#expires');
     const siteList = document.querySelector('#site-list');
@@ -533,6 +579,16 @@ func shellPage() string {
       siteError.classList.add('hidden');
     }
 
+    function showAccountError(message) {
+      accountError.textContent = message;
+      accountError.classList.remove('hidden');
+    }
+
+    function hideAccountError() {
+      accountError.textContent = '';
+      accountError.classList.add('hidden');
+    }
+
     function escapeHTML(value) {
       return String(value ?? '').replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
     }
@@ -556,6 +612,7 @@ func shellPage() string {
             '<button class="secondary" type="button" data-action="edit" data-site="' + encoded + '">编辑</button>' +
             '<button class="secondary" type="button" data-action="default" data-id="' + site.id + '"' + (site.isDefault ? ' disabled' : '') + '>设为默认</button>' +
             '<button class="secondary" type="button" data-action="toggle" data-id="' + site.id + '" data-enabled="' + site.enabled + '">' + (site.enabled ? '停用' : '启用') + '</button>' +
+            '<button class="secondary" type="button" data-action="accounts" data-id="' + site.id + '">查看账号</button>' +
             '<button class="secondary" type="button" data-action="test" data-id="' + site.id + '">测试连接</button>' +
             '<button class="danger" type="button" data-action="delete" data-id="' + site.id + '">删除</button>' +
           '</div>' +
@@ -586,6 +643,64 @@ func shellPage() string {
     async function refreshMe() {
       const me = await api('api/auth/me');
       me.authenticated ? showAuthed(me) : showLogin();
+    }
+
+    function accountName(account) {
+      return account.name || account.email || account.account || account.id || '未命名账号';
+    }
+
+    function accountMeta(account) {
+      const parts = [];
+      if (account.platform) parts.push(account.platform);
+      if (account.status) parts.push(account.status);
+      if (account.group_name) parts.push(account.group_name);
+      if (account.priority !== undefined) parts.push('优先级 ' + account.priority);
+      if (account.rate_limit_reset_at) parts.push('rate limit reset ' + account.rate_limit_reset_at);
+      return parts.join(' · ');
+    }
+
+    function normalizeAccounts(payload) {
+      if (Array.isArray(payload)) return payload;
+      if (Array.isArray(payload.data)) return payload.data;
+      if (payload.data && Array.isArray(payload.data.items)) return payload.data.items;
+      if (payload.data && Array.isArray(payload.data.accounts)) return payload.data.accounts;
+      if (Array.isArray(payload.items)) return payload.items;
+      if (Array.isArray(payload.accounts)) return payload.accounts;
+      return [];
+    }
+
+    async function loadAccounts(siteId) {
+      hideAccountError();
+      const form = new FormData(accountFilterForm);
+      const targetSiteId = siteId || form.get('siteId');
+      if (!targetSiteId) {
+        showAccountError('请先选择站点');
+        return;
+      }
+      accountFilterForm.elements.siteId.value = targetSiteId;
+      const params = new URLSearchParams();
+      params.set('page', '1');
+      params.set('page_size', '20');
+      ['search', 'platform', 'status'].forEach((key) => {
+        const value = String(form.get(key) || '').trim();
+        if (value) params.set(key, value);
+      });
+      const payload = await api('api/sites/' + targetSiteId + '/accounts?' + params.toString());
+      const accounts = normalizeAccounts(payload);
+      if (!accounts.length) {
+        accountList.innerHTML = '<p class="muted">没有匹配的账号。</p>';
+        return;
+      }
+      accountList.innerHTML = accounts.map((account) => {
+        const name = escapeHTML(accountName(account));
+        const meta = escapeHTML(accountMeta(account));
+        const note = account.note || account.remark || account.description || '';
+        return '<div class="account-item">' +
+          '<strong>' + name + '</strong>' +
+          (meta ? '<p class="muted">' + meta + '</p>' : '') +
+          (note ? '<p class="muted">' + escapeHTML(note) + '</p>' : '') +
+        '</div>';
+      }).join('');
     }
 
     loginForm.addEventListener('submit', async (event) => {
@@ -650,6 +765,9 @@ func shellPage() string {
         if (button.dataset.action === 'toggle') {
           await patchSite(id, { enabled: button.dataset.enabled !== 'true' });
         }
+        if (button.dataset.action === 'accounts') {
+          await loadAccounts(id);
+        }
         if (button.dataset.action === 'test') {
           const result = await api('api/sites/' + id + '/test', { method: 'POST', body: '{}' });
           alert(result.ok ? '连接正常' : '连接失败：' + (result.statusCode || result.error || '未知错误'));
@@ -661,6 +779,15 @@ func shellPage() string {
         }
       } catch (error) {
         showSiteError(error.message);
+      }
+    });
+
+    accountFilterForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        await loadAccounts();
+      } catch (error) {
+        showAccountError(error.message);
       }
     });
 
