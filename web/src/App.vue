@@ -48,9 +48,12 @@ const accountFilters = reactive({
 
 const accountPager = reactive({
   page: 1,
-  pageSize: 20,
+  pageSize: 10,
   total: 0,
 })
+
+const accountCache = new Map<string, { expiresAt: number; payload: any }>()
+let accountRequestSeq = 0
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
@@ -186,19 +189,30 @@ async function loadAccounts() {
     accountError.value = '请先选择站点'
     return
   }
-  accountsLoading.value = true
+  const requestSeq = ++accountRequestSeq
   const params = new URLSearchParams({ page: String(accountPager.page), page_size: String(accountPager.pageSize) })
   Object.entries(accountFilters).forEach(([key, value]) => {
     if (value.trim()) params.set(key, value.trim())
   })
+  const cacheKey = `${activeSiteId.value}?${params.toString()}`
+  const cached = accountCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    accounts.value = normalizeAccounts(cached.payload)
+    accountPager.total = Number(cached.payload.total || cached.payload.data?.total || 0)
+    return
+  }
+  accountsLoading.value = true
   try {
     const payload = await api<any>(`api/sites/${activeSiteId.value}/accounts?${params.toString()}`)
+    if (requestSeq !== accountRequestSeq) return
+    accountCache.set(cacheKey, { expiresAt: Date.now() + 8000, payload })
     accounts.value = normalizeAccounts(payload)
     accountPager.total = Number(payload.total || payload.data?.total || 0)
   } catch (error) {
+    if (requestSeq !== accountRequestSeq) return
     accountError.value = error instanceof Error ? error.message : '查询账号失败'
   } finally {
-    accountsLoading.value = false
+    if (requestSeq === accountRequestSeq) accountsLoading.value = false
   }
 }
 

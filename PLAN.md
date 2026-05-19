@@ -37,6 +37,7 @@ Status:
 - Minimal account query UI added with search, platform, and status fields.
 - Account results now use a table layout with basic pagination controls.
 - Account page size selector added.
+- Default account page size changed to 10 with short client-side query cache.
 - Advanced filters and pagination controls are still pending.
 
 ## Phase 3: Import Workflow
