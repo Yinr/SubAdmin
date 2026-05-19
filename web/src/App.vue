@@ -251,13 +251,46 @@ function goNextAccounts() {
 }
 
 function accountName(account: Account) {
-  return String(account.name || account.email || account.account || account.id || '未命名账号')
+  const extra = (account.extra || {}) as Record<string, unknown>
+  return String(account.name || account.email || extra.name || extra.email || account.id || '未命名账号')
 }
 
-function accountMeta(account: Account) {
-  return [account.platform, account.status, account.group_name, account.priority !== undefined ? `优先级 ${account.priority}` : '']
+function accountGroups(account: Account) {
+  const groups = Array.isArray(account.groups) ? account.groups : []
+  const accountGroups = Array.isArray(account.account_groups) ? account.account_groups : []
+  const names = groups
+    .map((group: any) => group?.name)
+    .concat(accountGroups.map((item: any) => item?.group?.name))
     .filter(Boolean)
-    .join(' · ')
+  return names.length ? names.join(' / ') : '未分组'
+}
+
+function accountProxy(account: Account) {
+  const proxy = account.proxy as Record<string, unknown> | undefined
+  if (!proxy) return account.proxy_id ? `代理 #${account.proxy_id}` : '无代理'
+  return String(proxy.name || proxy.id || account.proxy_id || '未知代理')
+}
+
+function accountSchedule(account: Account) {
+  if (account.temp_unschedulable_until) return '临时不可调度'
+  if (account.schedulable === false) return '不可调度'
+  if (account.overload_until) return '过载冷却'
+  if (account.rate_limit_reset_at) return '限流中'
+  return '可调度'
+}
+
+function accountUsage(account: Account) {
+  const extra = (account.extra || {}) as Record<string, unknown>
+  const primary = extra.codex_primary_used_percent ?? extra.codex_5h_used_percent
+  const secondary = extra.codex_secondary_used_percent ?? extra.codex_7d_used_percent
+  return [primary !== undefined ? `短窗 ${primary}%` : '', secondary !== undefined ? `长窗 ${secondary}%` : ''].filter(Boolean).join(' / ') || '未知'
+}
+
+function formatDateTime(value: unknown) {
+  if (!value) return '未知'
+  const date = new Date(String(value))
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString('zh-CN', { hour12: false })
 }
 
 function openAccountDetail(account: Account) {
@@ -366,8 +399,9 @@ onMounted(refreshMe)
                 <tr>
                   <th>名称</th>
                   <th>平台/状态</th>
-                  <th>分组/优先级</th>
-                  <th>备注</th>
+                  <th>分组</th>
+                  <th>代理/调度</th>
+                  <th>用量/最近使用</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -375,12 +409,13 @@ onMounted(refreshMe)
                 <tr v-for="account in accounts" :key="String(account.id || accountName(account))">
                   <td>{{ accountName(account) }}</td>
                   <td>{{ [account.platform, account.status].filter(Boolean).join(' / ') || '未知' }}</td>
-                  <td>{{ [account.group_name, account.priority !== undefined ? `优先级 ${account.priority}` : ''].filter(Boolean).join(' / ') || '未知' }}</td>
-                  <td>{{ account.note || account.remark || account.description || '无' }}</td>
+                  <td>{{ accountGroups(account) }}</td>
+                  <td>{{ accountProxy(account) }} / {{ accountSchedule(account) }}</td>
+                  <td>{{ accountUsage(account) }}<br><span class="muted">{{ formatDateTime(account.last_used_at) }}</span></td>
                   <td><button class="secondary" @click="openAccountDetail(account)">详情</button></td>
                 </tr>
                 <tr v-if="!accounts.length">
-                  <td colspan="5" class="muted">{{ accountPager.loaded ? '没有匹配的账号。' : '请选择站点并查询账号。' }}</td>
+                  <td colspan="6" class="muted">{{ accountPager.loaded ? '没有匹配的账号。' : '请选择站点并查询账号。' }}</td>
                 </tr>
               </tbody>
             </table>
@@ -423,6 +458,10 @@ onMounted(refreshMe)
           <span>平台</span><strong>{{ selectedAccount.platform || '未知' }}</strong>
           <span>状态</span><strong>{{ selectedAccount.status || '未知' }}</strong>
           <span>优先级</span><strong>{{ selectedAccount.priority ?? '未知' }}</strong>
+          <span>分组</span><strong>{{ accountGroups(selectedAccount) }}</strong>
+          <span>代理</span><strong>{{ accountProxy(selectedAccount) }}</strong>
+          <span>调度</span><strong>{{ accountSchedule(selectedAccount) }}</strong>
+          <span>最近使用</span><strong>{{ formatDateTime(selectedAccount.last_used_at) }}</strong>
         </div>
         <pre class="detail-json">{{ accountDetailJSON(selectedAccount) }}</pre>
         <div class="modal-actions">

@@ -40,6 +40,8 @@ Status:
 - Default account page size changed to 10 with short client-side query cache.
 - Pagination UI now shows total pages, disables unavailable next page, and page-size changes auto-query from page 1.
 - Added a read-only account detail modal based on current list data, with client-side redaction for sensitive field names.
+- Account list proxy now redacts sensitive upstream fields before sending data to the browser.
+- Account table now shows groups, proxy/scheduling state, usage percentages, and last-used time.
 - Advanced filters are still pending.
 
 ## Phase 3: Import Workflow

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"subadmin/internal/auth"
@@ -170,6 +171,7 @@ func main() {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(statusCode)
+			data = sanitizeJSONForBrowser(data)
 			_, _ = w.Write(data)
 			return
 		}
@@ -251,6 +253,45 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{"error": message})
+}
+
+func sanitizeJSONForBrowser(data []byte) []byte {
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return data
+	}
+	redactSensitive(value)
+	sanitized, err := json.Marshal(value)
+	if err != nil {
+		return data
+	}
+	return sanitized
+}
+
+func redactSensitive(value any) {
+	switch current := value.(type) {
+	case map[string]any:
+		for key, child := range current {
+			if isSensitiveKey(key) {
+				current[key] = "[redacted]"
+				continue
+			}
+			redactSensitive(child)
+		}
+	case []any:
+		for _, child := range current {
+			redactSensitive(child)
+		}
+	}
+}
+
+func isSensitiveKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "credentials", "credential", "access_token", "refresh_token", "id_token", "token", "secret", "password", "cookie", "authorization", "api_key", "key", "username":
+		return true
+	default:
+		return false
+	}
 }
 
 func requireAuth(w http.ResponseWriter, r *http.Request, manager *auth.Manager) bool {
