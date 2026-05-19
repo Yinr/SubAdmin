@@ -304,6 +304,11 @@ func shellPage() string {
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 16px;
     }
+    .stack {
+      display: grid;
+      gap: 16px;
+      margin-top: 22px;
+    }
     .card {
       padding: 18px;
       border: 1px solid var(--border);
@@ -368,6 +373,48 @@ func shellPage() string {
       background: rgba(148, 163, 184, 0.14);
       color: #e2e8f0;
     }
+    button.danger {
+      background: rgba(239, 68, 68, 0.16);
+      color: #fecaca;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 14px;
+    }
+    .site-list {
+      display: grid;
+      gap: 12px;
+    }
+    .site-item {
+      padding: 14px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.66);
+    }
+    .site-title {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .muted { color: var(--muted); }
+    .pill {
+      display: inline-flex;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(196, 181, 253, 0.12);
+      color: #ddd6fe;
+      font-size: 12px;
+    }
     .hidden { display: none; }
     .error { color: #fecaca; }
     .dot {
@@ -398,6 +445,30 @@ func shellPage() string {
         <div class="status"><span class="dot"></span> authenticated session active</div>
         <p id="expires"></p>
         <form id="logout-form"><button class="secondary" type="submit">Sign out</button></form>
+        <section class="stack">
+          <article class="card">
+            <h2>Sites</h2>
+            <p class="muted">Add sub2api sites. Admin keys are sent to this backend and stored encrypted.</p>
+            <form id="site-form">
+              <div class="row">
+                <label>Name<input name="name" required placeholder="main" /></label>
+                <label>Base URL<input name="baseUrl" required placeholder="http://127.0.0.1:8080" /></label>
+              </div>
+              <label>Admin key<input name="adminKey" type="password" required autocomplete="off" /></label>
+              <label>Note<input name="note" placeholder="optional" /></label>
+              <div class="toolbar">
+                <label><input name="isDefault" type="checkbox" /> Default site</label>
+                <button type="submit">Add site</button>
+                <button class="secondary" type="button" id="refresh-sites">Refresh</button>
+              </div>
+              <p id="site-error" class="error hidden"></p>
+            </form>
+          </article>
+          <article class="card">
+            <h2>Configured sites</h2>
+            <div id="site-list" class="site-list"><p class="muted">No sites loaded.</p></div>
+          </article>
+        </section>
       </div>
     </section>
 
@@ -419,9 +490,13 @@ func shellPage() string {
   <script>
     const loginForm = document.querySelector('#login-form');
     const logoutForm = document.querySelector('#logout-form');
+    const siteForm = document.querySelector('#site-form');
+    const refreshSitesButton = document.querySelector('#refresh-sites');
     const loginError = document.querySelector('#login-error');
+    const siteError = document.querySelector('#site-error');
     const consolePanel = document.querySelector('#console');
     const expires = document.querySelector('#expires');
+    const siteList = document.querySelector('#site-list');
 
     async function api(path, options = {}) {
       const res = await fetch(path, {
@@ -438,12 +513,50 @@ func shellPage() string {
       loginForm.classList.add('hidden');
       consolePanel.classList.remove('hidden');
       expires.textContent = data.expiresAt ? 'Session expires at ' + data.expiresAt : '';
+      loadSites().catch((error) => showSiteError(error.message));
     }
 
     function showLogin() {
       loginForm.classList.remove('hidden');
       consolePanel.classList.add('hidden');
       expires.textContent = '';
+      siteList.innerHTML = '<p class="muted">Sign in to load sites.</p>';
+    }
+
+    function showSiteError(message) {
+      siteError.textContent = message;
+      siteError.classList.remove('hidden');
+    }
+
+    function hideSiteError() {
+      siteError.textContent = '';
+      siteError.classList.add('hidden');
+    }
+
+    function escapeHTML(value) {
+      return String(value ?? '').replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
+    }
+
+    async function loadSites() {
+      const data = await api('api/sites');
+      const items = data.items || [];
+      if (!items.length) {
+        siteList.innerHTML = '<p class="muted">No sites configured yet.</p>';
+        return;
+      }
+      siteList.innerHTML = items.map((site) => {
+        const badges = (site.isDefault ? '<span class="pill">default</span>' : '') + ' ' + (site.enabled ? '<span class="pill">enabled</span>' : '<span class="pill">disabled</span>');
+        const note = site.note ? ' · ' + escapeHTML(site.note) : '';
+        return '<div class="site-item" data-site-id="' + site.id + '">' +
+          '<div class="site-title"><strong>' + escapeHTML(site.name) + '</strong><span>' + badges + '</span></div>' +
+          '<p class="muted">' + escapeHTML(site.baseUrl) + '</p>' +
+          '<p class="muted">Key: ' + escapeHTML(site.adminKeyHint) + note + '</p>' +
+          '<div class="toolbar">' +
+            '<button class="secondary" type="button" data-action="test" data-id="' + site.id + '">Test</button>' +
+            '<button class="danger" type="button" data-action="delete" data-id="' + site.id + '">Delete</button>' +
+          '</div>' +
+        '</div>';
+      }).join('');
     }
 
     async function refreshMe() {
@@ -469,6 +582,53 @@ func shellPage() string {
       event.preventDefault();
       await api('api/auth/logout', { method: 'POST', body: '{}' });
       showLogin();
+    });
+
+    siteForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      hideSiteError();
+      const form = new FormData(siteForm);
+      try {
+        await api('api/sites', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: form.get('name'),
+            baseUrl: form.get('baseUrl'),
+            adminKey: form.get('adminKey'),
+            note: form.get('note'),
+            isDefault: form.get('isDefault') === 'on',
+          }),
+        });
+        siteForm.reset();
+        await loadSites();
+      } catch (error) {
+        showSiteError(error.message);
+      }
+    });
+
+    refreshSitesButton.addEventListener('click', () => {
+      hideSiteError();
+      loadSites().catch((error) => showSiteError(error.message));
+    });
+
+    siteList.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      hideSiteError();
+      const id = button.dataset.id;
+      try {
+        if (button.dataset.action === 'test') {
+          const result = await api('api/sites/' + id + '/test', { method: 'POST', body: '{}' });
+          alert(result.ok ? 'Connection OK' : 'Connection failed: ' + (result.statusCode || result.error || 'unknown error'));
+        }
+        if (button.dataset.action === 'delete') {
+          if (!confirm('Delete this site?')) return;
+          await api('api/sites/' + id, { method: 'DELETE' });
+          await loadSites();
+        }
+      } catch (error) {
+        showSiteError(error.message);
+      }
     });
 
     refreshMe().catch(showLogin);

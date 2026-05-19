@@ -20,7 +20,7 @@ Status:
 - Backend site CRUD APIs added.
 - Site admin keys are encrypted before storage.
 - Site connectivity test API added.
-- UI site switching is still pending.
+- UI site management panel added in the shell.
 
 ## Phase 2: Account Listing
 - List upstream accounts for the selected site.
