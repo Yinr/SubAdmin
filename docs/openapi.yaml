@@ -1,0 +1,1151 @@
+openapi: 3.0.3
+info:
+  title: sub2api Admin API
+  version: 0.1.127
+  description: |
+    sub2api 管理端 API。本文档覆盖源码中 `RegisterAdminRoutes` 和 `RegisterPaymentRoutes`
+    挂载的所有 `adminAuth` 管理接口。
+
+    认证方式：在 Swagger UI 右上角 Authorize 中填写管理员 Key，实际请求会发送
+    `x-api-key: <admin-api-key>`。
+
+    管理员 Key 是全局高权限密钥，没有细粒度 scope。账号导出、备份下载、系统重启、
+    系统更新、支付退款、用量清理等接口有强副作用或敏感数据返回。
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local sub2api deployment
+security:
+  - AdminApiKey: []
+tags:
+  - name: Dashboard
+    description: 管理仪表盘、统计与聚合
+  - name: Users
+    description: 用户、用户 API Key、用户余额、用户属性值
+  - name: Groups
+    description: 分组、倍率、RPM override、容量和用量
+  - name: Accounts
+    description: 上游账号、凭据、模型、批量操作、Claude OAuth
+  - name: OAuth
+    description: OpenAI、Gemini、Antigravity OAuth 管理
+  - name: Proxies
+    description: 代理管理和代理导入导出
+  - name: Announcements
+    description: 公告管理
+  - name: RedeemCodes
+    description: 卡密/兑换码管理
+  - name: PromoCodes
+    description: 优惠码管理
+  - name: Settings
+    description: 系统设置、管理员 Key、网关运行策略
+  - name: DataManagement
+    description: 数据管理 agent、source profile、S3 profile、备份任务
+  - name: Backups
+    description: 数据库备份、下载、恢复
+  - name: Ops
+    description: 运维监控、告警、错误日志、请求明细、系统日志
+  - name: System
+    description: 版本、更新、回滚、重启
+  - name: Subscriptions
+    description: 用户订阅分配、延期、撤销、quota
+  - name: Usage
+    description: 用量记录、统计、清理任务
+  - name: UserAttributes
+    description: 用户属性定义
+  - name: ErrorPassthrough
+    description: 错误透传规则
+  - name: TLSFingerprintProfiles
+    description: TLS 指纹模板
+  - name: APIKeys
+    description: 管理用户 API Key 的分组和限速用量
+  - name: ScheduledTests
+    description: 账号定时测试计划
+  - name: Channels
+    description: 渠道管理
+  - name: ChannelMonitors
+    description: 渠道监控和模板
+  - name: RiskControl
+    description: 风控配置、日志、解封、flagged hash
+  - name: Affiliates
+    description: 邀请返利管理
+  - name: AdminPayment
+    description: 支付配置、订单、套餐、provider 管理
+paths:
+  # Reusable YAML anchors. This synthetic extension key is ignored by OpenAPI tools,
+  # but lets the path operations below reuse a full OpenAPI Responses Object.
+  x-response-anchors:
+    standard: &StandardResponses
+      '200':
+        description: 成功。sub2api 通常返回统一响应包裹，data 的具体结构随 handler/service 而定。
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ApiResponse'}
+      '400': {$ref: '#/components/responses/BadRequest'}
+      '401': {$ref: '#/components/responses/Unauthorized'}
+      '403': {$ref: '#/components/responses/Forbidden'}
+      '500': {$ref: '#/components/responses/InternalError'}
+    acceptedOrSuccess: &AcceptedOrSuccessResponses
+      '200':
+        description: 成功
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ApiResponse'}
+      '202':
+        description: 已接受，后台任务已启动
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ApiResponse'}
+      '400': {$ref: '#/components/responses/BadRequest'}
+      '401': {$ref: '#/components/responses/Unauthorized'}
+      '403': {$ref: '#/components/responses/Forbidden'}
+      '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/admin/dashboard/snapshot-v2:
+    get: {tags: [Dashboard], summary: 获取仪表盘快照 v2, operationId: getAdminDashboardSnapshotV2, responses: *StandardResponses}
+  /api/v1/admin/dashboard/stats:
+    get: {tags: [Dashboard], summary: 获取仪表盘总览统计, operationId: getAdminDashboardStats, responses: *StandardResponses}
+  /api/v1/admin/dashboard/realtime:
+    get: {tags: [Dashboard], summary: 获取实时指标, operationId: getAdminDashboardRealtime, responses: *StandardResponses}
+  /api/v1/admin/dashboard/trend:
+    get:
+      tags: [Dashboard]
+      summary: 获取用量趋势
+      operationId: getAdminDashboardTrend
+      parameters: [{$ref: '#/components/parameters/StartTime'}, {$ref: '#/components/parameters/EndTime'}, {$ref: '#/components/parameters/RequestType'}, {$ref: '#/components/parameters/Stream'}, {$ref: '#/components/parameters/BillingType'}]
+      responses: *StandardResponses
+  /api/v1/admin/dashboard/models:
+    get: {tags: [Dashboard], summary: 获取模型统计, operationId: getAdminDashboardModels, parameters: [{$ref: '#/components/parameters/StartTime'}, {$ref: '#/components/parameters/EndTime'}], responses: *StandardResponses}
+  /api/v1/admin/dashboard/groups:
+    get: {tags: [Dashboard], summary: 获取分组统计, operationId: getAdminDashboardGroups, parameters: [{$ref: '#/components/parameters/StartTime'}, {$ref: '#/components/parameters/EndTime'}], responses: *StandardResponses}
+  /api/v1/admin/dashboard/api-keys-trend:
+    get: {tags: [Dashboard], summary: 获取 API Key 用量趋势, operationId: getAdminDashboardApiKeysTrend, parameters: [{$ref: '#/components/parameters/StartTime'}, {$ref: '#/components/parameters/EndTime'}], responses: *StandardResponses}
+  /api/v1/admin/dashboard/users-trend:
+    get: {tags: [Dashboard], summary: 获取用户用量趋势, operationId: getAdminDashboardUsersTrend, parameters: [{$ref: '#/components/parameters/StartTime'}, {$ref: '#/components/parameters/EndTime'}], responses: *StandardResponses}
+  /api/v1/admin/dashboard/users-ranking:
+    get: {tags: [Dashboard], summary: 获取用户消费排行, operationId: getAdminDashboardUsersRanking, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}, {$ref: '#/components/parameters/StartTime'}, {$ref: '#/components/parameters/EndTime'}], responses: *StandardResponses}
+  /api/v1/admin/dashboard/users-usage:
+    post: {tags: [Dashboard], summary: 批量查询用户用量, operationId: postAdminDashboardUsersUsage, requestBody: {$ref: '#/components/requestBodies/IdListBody'}, responses: *StandardResponses}
+  /api/v1/admin/dashboard/api-keys-usage:
+    post: {tags: [Dashboard], summary: 批量查询 API Key 用量, operationId: postAdminDashboardApiKeysUsage, requestBody: {$ref: '#/components/requestBodies/IdListBody'}, responses: *StandardResponses}
+  /api/v1/admin/dashboard/user-breakdown:
+    get: {tags: [Dashboard], summary: 获取用户分解统计, operationId: getAdminDashboardUserBreakdown, parameters: [{$ref: '#/components/parameters/UserIdQuery'}, {$ref: '#/components/parameters/StartTime'}, {$ref: '#/components/parameters/EndTime'}], responses: *StandardResponses}
+  /api/v1/admin/dashboard/aggregation/backfill:
+    post: {tags: [Dashboard], summary: 回填聚合数据, operationId: postAdminDashboardAggregationBackfill, description: 有后台数据写入副作用。建议使用 Idempotency-Key。响应结构随聚合服务实现变化。 request body 可传 backfill 时间范围。 , requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+
+  /api/v1/admin/users:
+    get: {tags: [Users], summary: 用户列表, operationId: listAdminUsers, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}, {$ref: '#/components/parameters/Search'}, {$ref: '#/components/parameters/Status'}, {$ref: '#/components/parameters/Role'}], responses: *StandardResponses}
+    post:
+      tags: [Users]
+      summary: 创建用户
+      operationId: createAdminUser
+      requestBody: {$ref: '#/components/requestBodies/UserCreateBody'}
+      responses: *StandardResponses
+  /api/v1/admin/users/batch-concurrency:
+    post: {tags: [Users], summary: 批量更新用户并发, operationId: postAdminUsersBatchConcurrency, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/users/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Users], summary: 获取用户详情, operationId: getAdminUser, responses: *StandardResponses}
+    put: {tags: [Users], summary: 更新用户, operationId: updateAdminUser, requestBody: {$ref: '#/components/requestBodies/UserUpdateBody'}, responses: *StandardResponses}
+    delete: {tags: [Users], summary: 删除用户, operationId: deleteAdminUser, responses: *StandardResponses}
+  /api/v1/admin/users/{id}/auth-identities:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Users], summary: 手动绑定第三方认证身份, operationId: bindAdminUserAuthIdentity, requestBody: {$ref: '#/components/requestBodies/AuthIdentityBindBody'}, responses: *StandardResponses}
+  /api/v1/admin/users/{id}/balance:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Users], summary: 修改用户余额, operationId: updateAdminUserBalance, requestBody: {$ref: '#/components/requestBodies/BalanceUpdateBody'}, responses: *StandardResponses}
+  /api/v1/admin/users/{id}/api-keys:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Users], summary: 获取用户 API Key 列表, operationId: getAdminUserApiKeys, responses: *StandardResponses}
+  /api/v1/admin/users/{id}/usage:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Users], summary: 获取用户用量, operationId: getAdminUserUsage, parameters: [{$ref: '#/components/parameters/StartTime'}, {$ref: '#/components/parameters/EndTime'}], responses: *StandardResponses}
+  /api/v1/admin/users/{id}/balance-history:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Users], summary: 获取用户余额历史, operationId: getAdminUserBalanceHistory, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}], responses: *StandardResponses}
+  /api/v1/admin/users/{id}/replace-group:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Users], summary: 替换用户独占分组, operationId: replaceAdminUserGroup, requestBody: {$ref: '#/components/requestBodies/ReplaceGroupBody'}, responses: *StandardResponses}
+  /api/v1/admin/users/{id}/rpm-status:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Users], summary: 获取用户 RPM 状态, operationId: getAdminUserRpmStatus, responses: *StandardResponses}
+  /api/v1/admin/users/{id}/attributes:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Users], summary: 获取用户属性值, operationId: getAdminUserAttributes, responses: *StandardResponses}
+    put: {tags: [Users], summary: 更新用户属性值, operationId: updateAdminUserAttributes, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/users/{id}/subscriptions:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Subscriptions], summary: 获取用户订阅列表, operationId: getAdminUserSubscriptions, responses: *StandardResponses}
+
+  /api/v1/admin/groups:
+    get: {tags: [Groups], summary: 分组列表, operationId: listAdminGroups, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}, {$ref: '#/components/parameters/Search'}, {$ref: '#/components/parameters/Platform'}, {$ref: '#/components/parameters/Status'}], responses: *StandardResponses}
+    post: {tags: [Groups], summary: 创建分组, operationId: createAdminGroup, requestBody: {$ref: '#/components/requestBodies/GroupBody'}, responses: *StandardResponses}
+  /api/v1/admin/groups/all:
+    get: {tags: [Groups], summary: 获取全部分组, operationId: getAllAdminGroups, responses: *StandardResponses}
+  /api/v1/admin/groups/usage-summary:
+    get: {tags: [Groups], summary: 分组用量摘要, operationId: getAdminGroupUsageSummary, responses: *StandardResponses}
+  /api/v1/admin/groups/capacity-summary:
+    get: {tags: [Groups], summary: 分组容量摘要, operationId: getAdminGroupCapacitySummary, responses: *StandardResponses}
+  /api/v1/admin/groups/sort-order:
+    put: {tags: [Groups], summary: 更新分组排序, operationId: updateAdminGroupSortOrder, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/groups/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Groups], summary: 获取分组详情, operationId: getAdminGroup, responses: *StandardResponses}
+    put: {tags: [Groups], summary: 更新分组, operationId: updateAdminGroup, requestBody: {$ref: '#/components/requestBodies/GroupBody'}, responses: *StandardResponses}
+    delete: {tags: [Groups], summary: 删除分组, operationId: deleteAdminGroup, responses: *StandardResponses}
+  /api/v1/admin/groups/{id}/stats:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Groups], summary: 获取分组统计, operationId: getAdminGroupStats, responses: *StandardResponses}
+  /api/v1/admin/groups/{id}/rate-multipliers:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Groups], summary: 获取分组模型倍率, operationId: getAdminGroupRateMultipliers, responses: *StandardResponses}
+    put: {tags: [Groups], summary: 批量设置分组模型倍率, operationId: setAdminGroupRateMultipliers, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [Groups], summary: 清空分组模型倍率, operationId: clearAdminGroupRateMultipliers, responses: *StandardResponses}
+  /api/v1/admin/groups/{id}/rpm-overrides:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    put: {tags: [Groups], summary: 批量设置分组 RPM override, operationId: setAdminGroupRpmOverrides, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [Groups], summary: 清空分组 RPM override, operationId: clearAdminGroupRpmOverrides, responses: *StandardResponses}
+  /api/v1/admin/groups/{id}/api-keys:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Groups], summary: 获取分组 API Key, operationId: getAdminGroupApiKeys, responses: *StandardResponses}
+  /api/v1/admin/groups/{id}/subscriptions:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Subscriptions], summary: 获取分组订阅列表, operationId: getAdminGroupSubscriptions, responses: *StandardResponses}
+
+  /api/v1/admin/accounts:
+    get: {tags: [Accounts], summary: 上游账号列表, operationId: listAdminAccounts, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}, {$ref: '#/components/parameters/Search'}, {$ref: '#/components/parameters/Platform'}, {$ref: '#/components/parameters/Status'}], responses: *StandardResponses}
+    post: {tags: [Accounts], summary: 创建上游账号, operationId: createAdminAccount, requestBody: {$ref: '#/components/requestBodies/AccountBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/data:
+    get:
+      tags: [Accounts]
+      summary: 导出账号和代理数据
+      operationId: exportAdminAccountsData
+      description: 高风险接口。源码明确对管理员备份导出返回账号 credentials 原文；include_proxies=true 时返回代理密码。
+      parameters:
+        - {name: ids, in: query, required: false, schema: {type: string}, description: 逗号分隔账号 ID；为空导出全部匹配账号}
+        - {name: include_proxies, in: query, required: false, schema: {type: boolean, default: false}}
+      responses: *StandardResponses
+    post: {tags: [Accounts], summary: 导入账号和代理数据, operationId: importAdminAccountsData, requestBody: {$ref: '#/components/requestBodies/DataImportBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/batch:
+    post: {tags: [Accounts], summary: 批量创建账号, operationId: batchCreateAdminAccounts, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/bulk-update:
+    post: {tags: [Accounts], summary: 批量更新账号, operationId: bulkUpdateAdminAccounts, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/batch-update-credentials:
+    post: {tags: [Accounts], summary: 批量更新账号凭据, operationId: batchUpdateAdminAccountCredentials, description: 高风险接口，会写入上游账号 credentials。建议使用 Idempotency-Key。 , requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/batch-refresh-tier:
+    post: {tags: [Accounts], summary: 批量刷新账号 tier, operationId: batchRefreshAdminAccountTier, requestBody: {$ref: '#/components/requestBodies/IdListBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/batch-clear-error:
+    post: {tags: [Accounts], summary: 批量清除账号错误, operationId: batchClearAdminAccountError, requestBody: {$ref: '#/components/requestBodies/IdListBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/batch-refresh:
+    post: {tags: [Accounts], summary: 批量刷新账号 token/状态, operationId: batchRefreshAdminAccounts, requestBody: {$ref: '#/components/requestBodies/IdListBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/check-mixed-channel:
+    post: {tags: [Accounts], summary: 检查 mixed channel, operationId: checkAdminAccountMixedChannel, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/import/codex-session:
+    post: {tags: [Accounts], summary: 导入 Codex session, operationId: importAdminCodexSession, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/sync/crs:
+    post: {tags: [Accounts], summary: 从 CRS 同步账号, operationId: syncAdminAccountsFromCrs, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/sync/crs/preview:
+    post: {tags: [Accounts], summary: 预览 CRS 同步, operationId: previewAdminAccountsFromCrs, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/today-stats/batch:
+    post: {tags: [Accounts], summary: 批量获取账号今日统计, operationId: batchGetAdminAccountTodayStats, requestBody: {$ref: '#/components/requestBodies/IdListBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/antigravity/default-model-mapping:
+    get: {tags: [Accounts], summary: 获取 Antigravity 默认模型映射, operationId: getAdminAntigravityDefaultModelMapping, responses: *StandardResponses}
+  /api/v1/admin/accounts/generate-auth-url:
+    post: {tags: [Accounts], summary: 生成 Claude OAuth 授权 URL, operationId: generateClaudeAuthUrl, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/generate-setup-token-url:
+    post: {tags: [Accounts], summary: 生成 Claude setup token URL, operationId: generateClaudeSetupTokenUrl, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/exchange-code:
+    post: {tags: [Accounts], summary: 交换 Claude OAuth code, operationId: exchangeClaudeCode, requestBody: {$ref: '#/components/requestBodies/OAuthCodeBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/exchange-setup-token-code:
+    post: {tags: [Accounts], summary: 交换 Claude setup token code, operationId: exchangeClaudeSetupTokenCode, requestBody: {$ref: '#/components/requestBodies/OAuthCodeBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/cookie-auth:
+    post: {tags: [Accounts], summary: Claude cookie auth 导入, operationId: claudeCookieAuth, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/setup-token-cookie-auth:
+    post: {tags: [Accounts], summary: Claude setup token cookie auth 导入, operationId: claudeSetupTokenCookieAuth, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Accounts], summary: 获取账号详情, operationId: getAdminAccount, responses: *StandardResponses}
+    put: {tags: [Accounts], summary: 更新账号, operationId: updateAdminAccount, requestBody: {$ref: '#/components/requestBodies/AccountBody'}, responses: *StandardResponses}
+    delete: {tags: [Accounts], summary: 删除账号, operationId: deleteAdminAccount, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/test:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Accounts], summary: 测试账号, operationId: testAdminAccount, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/recover-state:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Accounts], summary: 恢复账号状态, operationId: recoverAdminAccountState, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/refresh:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Accounts], summary: 刷新账号 token/状态, operationId: refreshAdminAccount, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/set-privacy:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Accounts], summary: 设置账号隐私, operationId: setAdminAccountPrivacy, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/refresh-tier:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Accounts], summary: 刷新账号 tier, operationId: refreshAdminAccountTier, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/stats:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Accounts], summary: 获取账号统计, operationId: getAdminAccountStats, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/clear-error:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Accounts], summary: 清除账号错误, operationId: clearAdminAccountError, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/usage:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Accounts], summary: 获取账号用量, operationId: getAdminAccountUsage, parameters: [{$ref: '#/components/parameters/StartTime'}, {$ref: '#/components/parameters/EndTime'}], responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/today-stats:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Accounts], summary: 获取账号今日统计, operationId: getAdminAccountTodayStats, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/clear-rate-limit:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Accounts], summary: 清除账号 rate limit, operationId: clearAdminAccountRateLimit, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/reset-quota:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Accounts], summary: 重置账号 quota, operationId: resetAdminAccountQuota, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/temp-unschedulable:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Accounts], summary: 获取临时不可调度状态, operationId: getAdminAccountTempUnschedulable, responses: *StandardResponses}
+    delete: {tags: [Accounts], summary: 清除临时不可调度状态, operationId: clearAdminAccountTempUnschedulable, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/schedulable:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Accounts], summary: 设置账号是否可调度, operationId: setAdminAccountSchedulable, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/models:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Accounts], summary: 获取账号可用模型, operationId: getAdminAccountModels, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/models/sync-upstream:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Accounts], summary: 同步上游可用模型, operationId: syncAdminAccountUpstreamModels, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/scheduled-test-plans:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [ScheduledTests], summary: 获取账号定时测试计划, operationId: getAdminAccountScheduledTestPlans, responses: *StandardResponses}
+
+  /api/v1/admin/openai/generate-auth-url:
+    post: {tags: [OAuth], summary: 生成 OpenAI OAuth URL, operationId: generateOpenAiAuthUrl, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/openai/exchange-code:
+    post: {tags: [OAuth], summary: 交换 OpenAI OAuth code, operationId: exchangeOpenAiCode, requestBody: {$ref: '#/components/requestBodies/OAuthCodeBody'}, responses: *StandardResponses}
+  /api/v1/admin/openai/refresh-token:
+    post: {tags: [OAuth], summary: 刷新 OpenAI token, operationId: refreshOpenAiToken, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/openai/accounts/{id}/refresh:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [OAuth], summary: 刷新 OpenAI 账号 token, operationId: refreshOpenAiAccountToken, responses: *StandardResponses}
+  /api/v1/admin/openai/create-from-oauth:
+    post: {tags: [OAuth], summary: 从 OpenAI OAuth 创建账号, operationId: createOpenAiAccountFromOAuth, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/gemini/oauth/auth-url:
+    post: {tags: [OAuth], summary: 生成 Gemini OAuth URL, operationId: generateGeminiAuthUrl, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/gemini/oauth/exchange-code:
+    post: {tags: [OAuth], summary: 交换 Gemini OAuth code, operationId: exchangeGeminiCode, requestBody: {$ref: '#/components/requestBodies/OAuthCodeBody'}, responses: *StandardResponses}
+  /api/v1/admin/gemini/oauth/capabilities:
+    get: {tags: [OAuth], summary: 获取 Gemini OAuth 能力, operationId: getGeminiOAuthCapabilities, responses: *StandardResponses}
+  /api/v1/admin/antigravity/oauth/auth-url:
+    post: {tags: [OAuth], summary: 生成 Antigravity OAuth URL, operationId: generateAntigravityAuthUrl, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/antigravity/oauth/exchange-code:
+    post: {tags: [OAuth], summary: 交换 Antigravity OAuth code, operationId: exchangeAntigravityCode, requestBody: {$ref: '#/components/requestBodies/OAuthCodeBody'}, responses: *StandardResponses}
+  /api/v1/admin/antigravity/oauth/refresh-token:
+    post: {tags: [OAuth], summary: 刷新 Antigravity token, operationId: refreshAntigravityToken, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+
+  /api/v1/admin/proxies:
+    get: {tags: [Proxies], summary: 代理列表, operationId: listAdminProxies, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}, {$ref: '#/components/parameters/Search'}, {$ref: '#/components/parameters/Status'}], responses: *StandardResponses}
+    post: {tags: [Proxies], summary: 创建代理, operationId: createAdminProxy, requestBody: {$ref: '#/components/requestBodies/ProxyBody'}, responses: *StandardResponses}
+  /api/v1/admin/proxies/all:
+    get: {tags: [Proxies], summary: 获取全部代理, operationId: getAllAdminProxies, responses: *StandardResponses}
+  /api/v1/admin/proxies/data:
+    get: {tags: [Proxies], summary: 导出代理数据, operationId: exportAdminProxiesData, description: 可能包含代理用户名和密码。 , responses: *StandardResponses}
+    post: {tags: [Proxies], summary: 导入代理数据, operationId: importAdminProxiesData, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/proxies/batch-delete:
+    post: {tags: [Proxies], summary: 批量删除代理, operationId: batchDeleteAdminProxies, requestBody: {$ref: '#/components/requestBodies/IdListBody'}, responses: *StandardResponses}
+  /api/v1/admin/proxies/batch:
+    post: {tags: [Proxies], summary: 批量创建代理, operationId: batchCreateAdminProxies, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/proxies/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Proxies], summary: 获取代理详情, operationId: getAdminProxy, responses: *StandardResponses}
+    put: {tags: [Proxies], summary: 更新代理, operationId: updateAdminProxy, requestBody: {$ref: '#/components/requestBodies/ProxyBody'}, responses: *StandardResponses}
+    delete: {tags: [Proxies], summary: 删除代理, operationId: deleteAdminProxy, responses: *StandardResponses}
+  /api/v1/admin/proxies/{id}/test:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Proxies], summary: 测试代理, operationId: testAdminProxy, responses: *StandardResponses}
+  /api/v1/admin/proxies/{id}/quality-check:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Proxies], summary: 代理质量检查, operationId: checkAdminProxyQuality, responses: *StandardResponses}
+  /api/v1/admin/proxies/{id}/stats:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Proxies], summary: 获取代理统计, operationId: getAdminProxyStats, responses: *StandardResponses}
+  /api/v1/admin/proxies/{id}/accounts:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Proxies], summary: 获取代理绑定账号, operationId: getAdminProxyAccounts, responses: *StandardResponses}
+
+  /api/v1/admin/announcements:
+    get: {tags: [Announcements], summary: 公告列表, operationId: listAdminAnnouncements, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}], responses: *StandardResponses}
+    post: {tags: [Announcements], summary: 创建公告, operationId: createAdminAnnouncement, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/announcements/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Announcements], summary: 获取公告详情, operationId: getAdminAnnouncement, responses: *StandardResponses}
+    put: {tags: [Announcements], summary: 更新公告, operationId: updateAdminAnnouncement, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [Announcements], summary: 删除公告, operationId: deleteAdminAnnouncement, responses: *StandardResponses}
+  /api/v1/admin/announcements/{id}/read-status:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Announcements], summary: 公告阅读状态, operationId: getAdminAnnouncementReadStatus, responses: *StandardResponses}
+
+  /api/v1/admin/redeem-codes:
+    get: {tags: [RedeemCodes], summary: 兑换码列表, operationId: listAdminRedeemCodes, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}, {$ref: '#/components/parameters/Status'}], responses: *StandardResponses}
+  /api/v1/admin/redeem-codes/stats:
+    get: {tags: [RedeemCodes], summary: 兑换码统计, operationId: getAdminRedeemCodeStats, responses: *StandardResponses}
+  /api/v1/admin/redeem-codes/export:
+    get: {tags: [RedeemCodes], summary: 导出兑换码, operationId: exportAdminRedeemCodes, responses: *StandardResponses}
+  /api/v1/admin/redeem-codes/generate:
+    post: {tags: [RedeemCodes], summary: 批量生成兑换码, operationId: generateAdminRedeemCodes, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/redeem-codes/create-and-redeem:
+    post: {tags: [RedeemCodes], summary: 创建并立即给用户兑换, operationId: createAndRedeemAdminRedeemCode, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/redeem-codes/batch-delete:
+    post: {tags: [RedeemCodes], summary: 批量删除兑换码, operationId: batchDeleteAdminRedeemCodes, requestBody: {$ref: '#/components/requestBodies/IdListBody'}, responses: *StandardResponses}
+  /api/v1/admin/redeem-codes/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [RedeemCodes], summary: 获取兑换码详情, operationId: getAdminRedeemCode, responses: *StandardResponses}
+    delete: {tags: [RedeemCodes], summary: 删除兑换码, operationId: deleteAdminRedeemCode, responses: *StandardResponses}
+  /api/v1/admin/redeem-codes/{id}/expire:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [RedeemCodes], summary: 使兑换码过期, operationId: expireAdminRedeemCode, responses: *StandardResponses}
+
+  /api/v1/admin/promo-codes:
+    get: {tags: [PromoCodes], summary: 优惠码列表, operationId: listAdminPromoCodes, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}], responses: *StandardResponses}
+    post: {tags: [PromoCodes], summary: 创建优惠码, operationId: createAdminPromoCode, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/promo-codes/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [PromoCodes], summary: 获取优惠码详情, operationId: getAdminPromoCode, responses: *StandardResponses}
+    put: {tags: [PromoCodes], summary: 更新优惠码, operationId: updateAdminPromoCode, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [PromoCodes], summary: 删除优惠码, operationId: deleteAdminPromoCode, responses: *StandardResponses}
+  /api/v1/admin/promo-codes/{id}/usages:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [PromoCodes], summary: 优惠码使用记录, operationId: getAdminPromoCodeUsages, responses: *StandardResponses}
+
+  /api/v1/admin/settings:
+    get: {tags: [Settings], summary: 获取系统设置, operationId: getAdminSettings, description: secret 字段通常以 *_configured 布尔值返回，不直接返回原文。 , responses: *StandardResponses}
+    put: {tags: [Settings], summary: 更新系统设置, operationId: updateAdminSettings, description: 可写 OAuth secret、SMTP、支付、注册、风控、网关策略等全局配置。 , requestBody: {$ref: '#/components/requestBodies/SettingsBody'}, responses: *StandardResponses}
+  /api/v1/admin/settings/test-smtp:
+    post: {tags: [Settings], summary: 测试 SMTP 连接, operationId: testAdminSmtp, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/settings/send-test-email:
+    post: {tags: [Settings], summary: 发送测试邮件, operationId: sendAdminTestEmail, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/settings/admin-api-key:
+    get: {tags: [Settings], summary: 获取管理员 Key 状态, operationId: getAdminApiKeyStatus, responses: *StandardResponses}
+    delete: {tags: [Settings], summary: 删除管理员 Key, operationId: deleteAdminApiKey, description: 成功后当前 x-api-key 认证会失效。 , responses: *StandardResponses}
+  /api/v1/admin/settings/admin-api-key/regenerate:
+    post: {tags: [Settings], summary: 生成或重置管理员 Key, operationId: regenerateAdminApiKey, description: 响应会返回完整 key，且只在生成时返回。成功后旧 key 失效。 , responses: *StandardResponses}
+  /api/v1/admin/settings/overload-cooldown:
+    get: {tags: [Settings], summary: 获取 529 过载冷却配置, operationId: getOverloadCooldownSettings, responses: *StandardResponses}
+    put: {tags: [Settings], summary: 更新 529 过载冷却配置, operationId: updateOverloadCooldownSettings, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/settings/rate-limit-429-cooldown:
+    get: {tags: [Settings], summary: 获取 429 默认回避配置, operationId: getRateLimit429CooldownSettings, responses: *StandardResponses}
+    put: {tags: [Settings], summary: 更新 429 默认回避配置, operationId: updateRateLimit429CooldownSettings, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/settings/stream-timeout:
+    get: {tags: [Settings], summary: 获取流超时配置, operationId: getStreamTimeoutSettings, responses: *StandardResponses}
+    put: {tags: [Settings], summary: 更新流超时配置, operationId: updateStreamTimeoutSettings, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/settings/rectifier:
+    get: {tags: [Settings], summary: 获取请求整流器配置, operationId: getRectifierSettings, responses: *StandardResponses}
+    put: {tags: [Settings], summary: 更新请求整流器配置, operationId: updateRectifierSettings, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/settings/beta-policy:
+    get: {tags: [Settings], summary: 获取 Beta policy 配置, operationId: getBetaPolicySettings, responses: *StandardResponses}
+    put: {tags: [Settings], summary: 更新 Beta policy 配置, operationId: updateBetaPolicySettings, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/settings/web-search-emulation:
+    get: {tags: [Settings], summary: 获取 Web Search 模拟配置, operationId: getWebSearchEmulationSettings, responses: *StandardResponses}
+    put: {tags: [Settings], summary: 更新 Web Search 模拟配置, operationId: updateWebSearchEmulationSettings, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/settings/web-search-emulation/test:
+    post: {tags: [Settings], summary: 测试 Web Search 模拟, operationId: testWebSearchEmulation, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/settings/web-search-emulation/reset-usage:
+    post: {tags: [Settings], summary: 重置 Web Search 用量, operationId: resetWebSearchUsage, responses: *StandardResponses}
+
+  /api/v1/admin/data-management/agent/health:
+    get: {tags: [DataManagement], summary: 数据管理 agent 健康, operationId: getDataManagementAgentHealth, responses: *StandardResponses}
+  /api/v1/admin/data-management/config:
+    get: {tags: [DataManagement], summary: 获取数据管理配置, operationId: getDataManagementConfig, responses: *StandardResponses}
+    put: {tags: [DataManagement], summary: 更新数据管理配置, operationId: updateDataManagementConfig, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/data-management/sources/{source_type}/profiles:
+    parameters: [{$ref: '#/components/parameters/SourceType'}]
+    get: {tags: [DataManagement], summary: 获取 source profiles, operationId: listSourceProfiles, responses: *StandardResponses}
+    post: {tags: [DataManagement], summary: 创建 source profile, operationId: createSourceProfile, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/data-management/sources/{source_type}/profiles/{profile_id}:
+    parameters: [{$ref: '#/components/parameters/SourceType'}, {$ref: '#/components/parameters/ProfileId'}]
+    put: {tags: [DataManagement], summary: 更新 source profile, operationId: updateSourceProfile, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [DataManagement], summary: 删除 source profile, operationId: deleteSourceProfile, responses: *StandardResponses}
+  /api/v1/admin/data-management/sources/{source_type}/profiles/{profile_id}/activate:
+    parameters: [{$ref: '#/components/parameters/SourceType'}, {$ref: '#/components/parameters/ProfileId'}]
+    post: {tags: [DataManagement], summary: 激活 source profile, operationId: activateSourceProfile, responses: *StandardResponses}
+  /api/v1/admin/data-management/s3/test:
+    post: {tags: [DataManagement], summary: 测试 S3, operationId: testDataManagementS3, requestBody: {$ref: '#/components/requestBodies/S3ConfigBody'}, responses: *StandardResponses}
+  /api/v1/admin/data-management/s3/profiles:
+    get: {tags: [DataManagement], summary: 获取 S3 profiles, operationId: listS3Profiles, responses: *StandardResponses}
+    post: {tags: [DataManagement], summary: 创建 S3 profile, operationId: createS3Profile, requestBody: {$ref: '#/components/requestBodies/S3ConfigBody'}, responses: *StandardResponses}
+  /api/v1/admin/data-management/s3/profiles/{profile_id}:
+    parameters: [{$ref: '#/components/parameters/ProfileId'}]
+    put: {tags: [DataManagement], summary: 更新 S3 profile, operationId: updateS3Profile, requestBody: {$ref: '#/components/requestBodies/S3ConfigBody'}, responses: *StandardResponses}
+    delete: {tags: [DataManagement], summary: 删除 S3 profile, operationId: deleteS3Profile, responses: *StandardResponses}
+  /api/v1/admin/data-management/s3/profiles/{profile_id}/activate:
+    parameters: [{$ref: '#/components/parameters/ProfileId'}]
+    post: {tags: [DataManagement], summary: 激活 S3 profile, operationId: activateS3Profile, responses: *StandardResponses}
+  /api/v1/admin/data-management/backups:
+    post: {tags: [DataManagement], summary: 创建数据管理备份任务, operationId: createDataManagementBackupJob, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    get: {tags: [DataManagement], summary: 数据管理备份任务列表, operationId: listDataManagementBackupJobs, responses: *StandardResponses}
+  /api/v1/admin/data-management/backups/{job_id}:
+    parameters: [{$ref: '#/components/parameters/JobId'}]
+    get: {tags: [DataManagement], summary: 获取数据管理备份任务, operationId: getDataManagementBackupJob, responses: *StandardResponses}
+
+  /api/v1/admin/backups/s3-config:
+    get: {tags: [Backups], summary: 获取备份 S3 配置, operationId: getBackupS3Config, responses: *StandardResponses}
+    put: {tags: [Backups], summary: 更新备份 S3 配置, operationId: updateBackupS3Config, requestBody: {$ref: '#/components/requestBodies/S3ConfigBody'}, responses: *StandardResponses}
+  /api/v1/admin/backups/s3-config/test:
+    post: {tags: [Backups], summary: 测试备份 S3 连接, operationId: testBackupS3Config, requestBody: {$ref: '#/components/requestBodies/S3ConfigBody'}, responses: *StandardResponses}
+  /api/v1/admin/backups/schedule:
+    get: {tags: [Backups], summary: 获取定时备份配置, operationId: getBackupSchedule, responses: *StandardResponses}
+    put: {tags: [Backups], summary: 更新定时备份配置, operationId: updateBackupSchedule, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/backups:
+    post: {tags: [Backups], summary: 创建备份, operationId: createBackup, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *AcceptedOrSuccessResponses}
+    get: {tags: [Backups], summary: 备份列表, operationId: listBackups, responses: *StandardResponses}
+  /api/v1/admin/backups/{id}:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    get: {tags: [Backups], summary: 获取备份详情, operationId: getBackup, responses: *StandardResponses}
+    delete: {tags: [Backups], summary: 删除备份, operationId: deleteBackup, responses: *StandardResponses}
+  /api/v1/admin/backups/{id}/download-url:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    get: {tags: [Backups], summary: 获取备份下载 URL, operationId: getBackupDownloadUrl, description: 高风险接口，可能返回可下载完整备份的 URL。 , responses: *StandardResponses}
+  /api/v1/admin/backups/{id}/restore:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    post: {tags: [Backups], summary: 恢复备份, operationId: restoreBackup, description: 需要请求体提供当前管理员密码。管理员 Key 会映射为首个 active admin 用户，只有同时知道该用户密码才能执行恢复。 , requestBody: {$ref: '#/components/requestBodies/RestoreBackupBody'}, responses: *AcceptedOrSuccessResponses}
+
+  /api/v1/admin/system/version:
+    get: {tags: [System], summary: 当前版本, operationId: getSystemVersion, responses: *StandardResponses}
+  /api/v1/admin/system/check-updates:
+    get: {tags: [System], summary: 检查更新, operationId: checkSystemUpdates, parameters: [{name: force, in: query, required: false, schema: {type: boolean}}], responses: *StandardResponses}
+  /api/v1/admin/system/update:
+    post: {tags: [System], summary: 执行系统更新, operationId: performSystemUpdate, description: 高风险接口，会下载并应用更新，通常需要随后重启服务。建议使用 Idempotency-Key。 , parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], responses: *StandardResponses}
+  /api/v1/admin/system/rollback:
+    post: {tags: [System], summary: 执行系统回滚, operationId: rollbackSystem, description: 高风险接口，会回滚到上一版本，通常需要随后重启服务。建议使用 Idempotency-Key。 , parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], responses: *StandardResponses}
+  /api/v1/admin/system/restart:
+    post: {tags: [System], summary: 重启服务, operationId: restartSystemService, description: 高风险接口，响应发送后后台触发服务重启。建议使用 Idempotency-Key。 , parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], responses: *StandardResponses}
+
+  /api/v1/admin/subscriptions:
+    get: {tags: [Subscriptions], summary: 订阅列表, operationId: listAdminSubscriptions, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}], responses: *StandardResponses}
+  /api/v1/admin/subscriptions/assign:
+    post: {tags: [Subscriptions], summary: 分配订阅, operationId: assignSubscription, requestBody: {$ref: '#/components/requestBodies/SubscriptionAssignBody'}, responses: *StandardResponses}
+  /api/v1/admin/subscriptions/bulk-assign:
+    post: {tags: [Subscriptions], summary: 批量分配订阅, operationId: bulkAssignSubscriptions, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/subscriptions/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Subscriptions], summary: 获取订阅详情, operationId: getAdminSubscription, responses: *StandardResponses}
+    delete: {tags: [Subscriptions], summary: 撤销订阅, operationId: revokeAdminSubscription, responses: *StandardResponses}
+  /api/v1/admin/subscriptions/{id}/progress:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Subscriptions], summary: 获取订阅进度, operationId: getAdminSubscriptionProgress, responses: *StandardResponses}
+  /api/v1/admin/subscriptions/{id}/extend:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Subscriptions], summary: 延长订阅, operationId: extendAdminSubscription, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/subscriptions/{id}/reset-quota:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Subscriptions], summary: 重置订阅 quota, operationId: resetAdminSubscriptionQuota, responses: *StandardResponses}
+
+  /api/v1/admin/usage:
+    get: {tags: [Usage], summary: 用量记录列表, operationId: listAdminUsage, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}, {$ref: '#/components/parameters/UserIdQuery'}, {$ref: '#/components/parameters/ApiKeyIdQuery'}, {$ref: '#/components/parameters/AccountIdQuery'}, {$ref: '#/components/parameters/GroupIdQuery'}, {$ref: '#/components/parameters/StartTime'}, {$ref: '#/components/parameters/EndTime'}, {$ref: '#/components/parameters/RequestType'}, {$ref: '#/components/parameters/Stream'}, {$ref: '#/components/parameters/BillingType'}], responses: *StandardResponses}
+  /api/v1/admin/usage/stats:
+    get: {tags: [Usage], summary: 用量统计, operationId: getAdminUsageStats, responses: *StandardResponses}
+  /api/v1/admin/usage/search-users:
+    get: {tags: [Usage], summary: 搜索用量用户, operationId: searchAdminUsageUsers, parameters: [{$ref: '#/components/parameters/Search'}], responses: *StandardResponses}
+  /api/v1/admin/usage/search-api-keys:
+    get: {tags: [Usage], summary: 搜索用量 API Key, operationId: searchAdminUsageApiKeys, parameters: [{$ref: '#/components/parameters/Search'}], responses: *StandardResponses}
+  /api/v1/admin/usage/cleanup-tasks:
+    get: {tags: [Usage], summary: 用量清理任务列表, operationId: listUsageCleanupTasks, responses: *StandardResponses}
+    post: {tags: [Usage], summary: 创建用量清理任务, operationId: createUsageCleanupTask, description: 高风险接口，会删除或清理用量记录。 , requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/usage/cleanup-tasks/{id}/cancel:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [Usage], summary: 取消用量清理任务, operationId: cancelUsageCleanupTask, responses: *StandardResponses}
+
+  /api/v1/admin/user-attributes:
+    get: {tags: [UserAttributes], summary: 属性定义列表, operationId: listUserAttributeDefinitions, responses: *StandardResponses}
+    post: {tags: [UserAttributes], summary: 创建属性定义, operationId: createUserAttributeDefinition, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/user-attributes/batch:
+    post: {tags: [UserAttributes], summary: 批量获取用户属性, operationId: batchGetUserAttributes, requestBody: {$ref: '#/components/requestBodies/IdListBody'}, responses: *StandardResponses}
+  /api/v1/admin/user-attributes/reorder:
+    put: {tags: [UserAttributes], summary: 调整属性定义顺序, operationId: reorderUserAttributes, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/user-attributes/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    put: {tags: [UserAttributes], summary: 更新属性定义, operationId: updateUserAttributeDefinition, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [UserAttributes], summary: 删除属性定义, operationId: deleteUserAttributeDefinition, responses: *StandardResponses}
+
+  /api/v1/admin/error-passthrough-rules:
+    get: {tags: [ErrorPassthrough], summary: 错误透传规则列表, operationId: listErrorPassthroughRules, responses: *StandardResponses}
+    post: {tags: [ErrorPassthrough], summary: 创建错误透传规则, operationId: createErrorPassthroughRule, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/error-passthrough-rules/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [ErrorPassthrough], summary: 获取错误透传规则, operationId: getErrorPassthroughRule, responses: *StandardResponses}
+    put: {tags: [ErrorPassthrough], summary: 更新错误透传规则, operationId: updateErrorPassthroughRule, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [ErrorPassthrough], summary: 删除错误透传规则, operationId: deleteErrorPassthroughRule, responses: *StandardResponses}
+
+  /api/v1/admin/tls-fingerprint-profiles:
+    get: {tags: [TLSFingerprintProfiles], summary: TLS 指纹模板列表, operationId: listTLSFingerprintProfiles, responses: *StandardResponses}
+    post: {tags: [TLSFingerprintProfiles], summary: 创建 TLS 指纹模板, operationId: createTLSFingerprintProfile, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/tls-fingerprint-profiles/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [TLSFingerprintProfiles], summary: 获取 TLS 指纹模板, operationId: getTLSFingerprintProfile, responses: *StandardResponses}
+    put: {tags: [TLSFingerprintProfiles], summary: 更新 TLS 指纹模板, operationId: updateTLSFingerprintProfile, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [TLSFingerprintProfiles], summary: 删除 TLS 指纹模板, operationId: deleteTLSFingerprintProfile, responses: *StandardResponses}
+
+  /api/v1/admin/api-keys/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    put: {tags: [APIKeys], summary: 更新用户 API Key 管理字段, operationId: updateAdminApiKey, description: 可修改 API Key 分组绑定，或重置 5h/1d/7d 限速用量窗口。 , requestBody: {$ref: '#/components/requestBodies/AdminApiKeyUpdateBody'}, responses: *StandardResponses}
+
+  /api/v1/admin/scheduled-test-plans:
+    post: {tags: [ScheduledTests], summary: 创建定时测试计划, operationId: createScheduledTestPlan, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/scheduled-test-plans/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    put: {tags: [ScheduledTests], summary: 更新定时测试计划, operationId: updateScheduledTestPlan, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [ScheduledTests], summary: 删除定时测试计划, operationId: deleteScheduledTestPlan, responses: *StandardResponses}
+  /api/v1/admin/scheduled-test-plans/{id}/results:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [ScheduledTests], summary: 定时测试结果, operationId: listScheduledTestResults, responses: *StandardResponses}
+
+  /api/v1/admin/channels:
+    get: {tags: [Channels], summary: 渠道列表, operationId: listChannels, responses: *StandardResponses}
+    post: {tags: [Channels], summary: 创建渠道, operationId: createChannel, requestBody: {$ref: '#/components/requestBodies/ChannelBody'}, responses: *StandardResponses}
+  /api/v1/admin/channels/model-pricing:
+    get: {tags: [Channels], summary: 获取模型默认定价, operationId: getChannelModelDefaultPricing, responses: *StandardResponses}
+  /api/v1/admin/channels/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [Channels], summary: 获取渠道详情, operationId: getChannel, responses: *StandardResponses}
+    put: {tags: [Channels], summary: 更新渠道, operationId: updateChannel, requestBody: {$ref: '#/components/requestBodies/ChannelBody'}, responses: *StandardResponses}
+    delete: {tags: [Channels], summary: 删除渠道, operationId: deleteChannel, responses: *StandardResponses}
+
+  /api/v1/admin/channel-monitors:
+    get: {tags: [ChannelMonitors], summary: 渠道监控列表, operationId: listChannelMonitors, responses: *StandardResponses}
+    post: {tags: [ChannelMonitors], summary: 创建渠道监控, operationId: createChannelMonitor, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/channel-monitors/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [ChannelMonitors], summary: 获取渠道监控, operationId: getChannelMonitor, responses: *StandardResponses}
+    put: {tags: [ChannelMonitors], summary: 更新渠道监控, operationId: updateChannelMonitor, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [ChannelMonitors], summary: 删除渠道监控, operationId: deleteChannelMonitor, responses: *StandardResponses}
+  /api/v1/admin/channel-monitors/{id}/run:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [ChannelMonitors], summary: 手动运行渠道监控, operationId: runChannelMonitor, responses: *StandardResponses}
+  /api/v1/admin/channel-monitors/{id}/history:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [ChannelMonitors], summary: 渠道监控历史, operationId: getChannelMonitorHistory, responses: *StandardResponses}
+  /api/v1/admin/channel-monitor-templates:
+    get: {tags: [ChannelMonitors], summary: 渠道监控模板列表, operationId: listChannelMonitorTemplates, responses: *StandardResponses}
+    post: {tags: [ChannelMonitors], summary: 创建渠道监控模板, operationId: createChannelMonitorTemplate, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/channel-monitor-templates/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [ChannelMonitors], summary: 获取渠道监控模板, operationId: getChannelMonitorTemplate, responses: *StandardResponses}
+    put: {tags: [ChannelMonitors], summary: 更新渠道监控模板, operationId: updateChannelMonitorTemplate, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [ChannelMonitors], summary: 删除渠道监控模板, operationId: deleteChannelMonitorTemplate, responses: *StandardResponses}
+  /api/v1/admin/channel-monitor-templates/{id}/monitors:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get: {tags: [ChannelMonitors], summary: 模板关联监控, operationId: getChannelMonitorTemplateMonitors, responses: *StandardResponses}
+  /api/v1/admin/channel-monitor-templates/{id}/apply:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post: {tags: [ChannelMonitors], summary: 应用渠道监控模板, operationId: applyChannelMonitorTemplate, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+
+  /api/v1/admin/risk-control/config:
+    get: {tags: [RiskControl], summary: 获取风控配置, operationId: getRiskControlConfig, responses: *StandardResponses}
+    put: {tags: [RiskControl], summary: 更新风控配置, operationId: updateRiskControlConfig, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/risk-control/api-keys/test:
+    post: {tags: [RiskControl], summary: 测试风控 API Key, operationId: testRiskControlApiKeys, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/risk-control/status:
+    get: {tags: [RiskControl], summary: 风控状态, operationId: getRiskControlStatus, responses: *StandardResponses}
+  /api/v1/admin/risk-control/logs:
+    get: {tags: [RiskControl], summary: 风控日志, operationId: listRiskControlLogs, responses: *StandardResponses}
+  /api/v1/admin/risk-control/users/{user_id}/unban:
+    parameters: [{$ref: '#/components/parameters/UserIdPath'}]
+    post: {tags: [RiskControl], summary: 解封用户, operationId: unbanRiskControlUser, responses: *StandardResponses}
+  /api/v1/admin/risk-control/hashes:
+    delete: {tags: [RiskControl], summary: 删除 flagged hash, operationId: deleteRiskControlFlaggedHash, parameters: [{name: hash, in: query, required: false, schema: {type: string}}], responses: *StandardResponses}
+  /api/v1/admin/risk-control/hashes/all:
+    delete: {tags: [RiskControl], summary: 清空全部 flagged hashes, operationId: clearRiskControlFlaggedHashes, responses: *StandardResponses}
+
+  /api/v1/admin/affiliates/invites:
+    get: {tags: [Affiliates], summary: 邀请记录列表, operationId: listAffiliateInviteRecords, responses: *StandardResponses}
+  /api/v1/admin/affiliates/rebates:
+    get: {tags: [Affiliates], summary: 返利记录列表, operationId: listAffiliateRebateRecords, responses: *StandardResponses}
+  /api/v1/admin/affiliates/transfers:
+    get: {tags: [Affiliates], summary: 转账记录列表, operationId: listAffiliateTransferRecords, responses: *StandardResponses}
+  /api/v1/admin/affiliates/users:
+    get: {tags: [Affiliates], summary: 返利用户列表, operationId: listAffiliateUsers, responses: *StandardResponses}
+  /api/v1/admin/affiliates/users/lookup:
+    get: {tags: [Affiliates], summary: 查找返利用户, operationId: lookupAffiliateUsers, parameters: [{$ref: '#/components/parameters/Search'}], responses: *StandardResponses}
+  /api/v1/admin/affiliates/users/batch-rate:
+    post: {tags: [Affiliates], summary: 批量设置返利比例, operationId: batchSetAffiliateUserRate, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/affiliates/users/{user_id}/overview:
+    parameters: [{$ref: '#/components/parameters/UserIdPath'}]
+    get: {tags: [Affiliates], summary: 返利用户概览, operationId: getAffiliateUserOverview, responses: *StandardResponses}
+  /api/v1/admin/affiliates/users/{user_id}:
+    parameters: [{$ref: '#/components/parameters/UserIdPath'}]
+    put: {tags: [Affiliates], summary: 更新返利用户设置, operationId: updateAffiliateUserSettings, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [Affiliates], summary: 清除返利用户设置, operationId: clearAffiliateUserSettings, responses: *StandardResponses}
+
+  /api/v1/admin/payment/dashboard:
+    get: {tags: [AdminPayment], summary: 支付 dashboard, operationId: getAdminPaymentDashboard, responses: *StandardResponses}
+  /api/v1/admin/payment/config:
+    get: {tags: [AdminPayment], summary: 获取支付配置, operationId: getAdminPaymentConfig, responses: *StandardResponses}
+    put: {tags: [AdminPayment], summary: 更新支付配置, operationId: updateAdminPaymentConfig, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/payment/orders:
+    get: {tags: [AdminPayment], summary: 支付订单列表, operationId: listAdminPaymentOrders, parameters: [{$ref: '#/components/parameters/Page'}, {$ref: '#/components/parameters/PageSize'}, {$ref: '#/components/parameters/Status'}], responses: *StandardResponses}
+  /api/v1/admin/payment/orders/{id}:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    get: {tags: [AdminPayment], summary: 支付订单详情, operationId: getAdminPaymentOrder, responses: *StandardResponses}
+  /api/v1/admin/payment/orders/{id}/cancel:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    post: {tags: [AdminPayment], summary: 取消支付订单, operationId: cancelAdminPaymentOrder, responses: *StandardResponses}
+  /api/v1/admin/payment/orders/{id}/retry:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    post: {tags: [AdminPayment], summary: 重试订单履约, operationId: retryAdminPaymentFulfillment, responses: *StandardResponses}
+  /api/v1/admin/payment/orders/{id}/refund:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    post: {tags: [AdminPayment], summary: 处理退款, operationId: refundAdminPaymentOrder, description: 财务高风险接口。 , requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/payment/plans:
+    get: {tags: [AdminPayment], summary: 支付套餐列表, operationId: listAdminPaymentPlans, responses: *StandardResponses}
+    post: {tags: [AdminPayment], summary: 创建支付套餐, operationId: createAdminPaymentPlan, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/payment/plans/{id}:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    put: {tags: [AdminPayment], summary: 更新支付套餐, operationId: updateAdminPaymentPlan, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [AdminPayment], summary: 删除支付套餐, operationId: deleteAdminPaymentPlan, responses: *StandardResponses}
+  /api/v1/admin/payment/providers:
+    get: {tags: [AdminPayment], summary: 支付 provider 列表, operationId: listAdminPaymentProviders, responses: *StandardResponses}
+    post: {tags: [AdminPayment], summary: 创建支付 provider, operationId: createAdminPaymentProvider, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/payment/providers/{id}:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    put: {tags: [AdminPayment], summary: 更新支付 provider, operationId: updateAdminPaymentProvider, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [AdminPayment], summary: 删除支付 provider, operationId: deleteAdminPaymentProvider, responses: *StandardResponses}
+
+  /api/v1/admin/ops/concurrency:
+    get: {tags: [Ops], summary: 实时并发统计, operationId: getOpsConcurrencyStats, responses: *StandardResponses}
+  /api/v1/admin/ops/user-concurrency:
+    get: {tags: [Ops], summary: 用户并发统计, operationId: getOpsUserConcurrencyStats, responses: *StandardResponses}
+  /api/v1/admin/ops/account-availability:
+    get: {tags: [Ops], summary: 账号可用性, operationId: getOpsAccountAvailability, responses: *StandardResponses}
+  /api/v1/admin/ops/realtime-traffic:
+    get: {tags: [Ops], summary: 实时流量摘要, operationId: getOpsRealtimeTrafficSummary, responses: *StandardResponses}
+  /api/v1/admin/ops/alert-rules:
+    get: {tags: [Ops], summary: 告警规则列表, operationId: listOpsAlertRules, responses: *StandardResponses}
+    post: {tags: [Ops], summary: 创建告警规则, operationId: createOpsAlertRule, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/alert-rules/{id}:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    put: {tags: [Ops], summary: 更新告警规则, operationId: updateOpsAlertRule, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+    delete: {tags: [Ops], summary: 删除告警规则, operationId: deleteOpsAlertRule, responses: *StandardResponses}
+  /api/v1/admin/ops/alert-events:
+    get: {tags: [Ops], summary: 告警事件列表, operationId: listOpsAlertEvents, responses: *StandardResponses}
+  /api/v1/admin/ops/alert-events/{id}:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    get: {tags: [Ops], summary: 告警事件详情, operationId: getOpsAlertEvent, responses: *StandardResponses}
+  /api/v1/admin/ops/alert-events/{id}/status:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    put: {tags: [Ops], summary: 更新告警事件状态, operationId: updateOpsAlertEventStatus, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/alert-silences:
+    post: {tags: [Ops], summary: 创建告警静默, operationId: createOpsAlertSilence, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/email-notification/config:
+    get: {tags: [Ops], summary: 获取邮件通知配置, operationId: getOpsEmailNotificationConfig, responses: *StandardResponses}
+    put: {tags: [Ops], summary: 更新邮件通知配置, operationId: updateOpsEmailNotificationConfig, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/runtime/alert:
+    get: {tags: [Ops], summary: 获取告警运行时配置, operationId: getOpsAlertRuntimeSettings, responses: *StandardResponses}
+    put: {tags: [Ops], summary: 更新告警运行时配置, operationId: updateOpsAlertRuntimeSettings, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/runtime/logging:
+    get: {tags: [Ops], summary: 获取运行时日志配置, operationId: getOpsRuntimeLogConfig, responses: *StandardResponses}
+    put: {tags: [Ops], summary: 更新运行时日志配置, operationId: updateOpsRuntimeLogConfig, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/runtime/logging/reset:
+    post: {tags: [Ops], summary: 重置运行时日志配置, operationId: resetOpsRuntimeLogConfig, responses: *StandardResponses}
+  /api/v1/admin/ops/advanced-settings:
+    get: {tags: [Ops], summary: 获取 Ops advanced settings, operationId: getOpsAdvancedSettings, responses: *StandardResponses}
+    put: {tags: [Ops], summary: 更新 Ops advanced settings, operationId: updateOpsAdvancedSettings, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/settings/metric-thresholds:
+    get: {tags: [Ops], summary: 获取指标阈值, operationId: getOpsMetricThresholds, responses: *StandardResponses}
+    put: {tags: [Ops], summary: 更新指标阈值, operationId: updateOpsMetricThresholds, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/ws/qps:
+    get: {tags: [Ops], summary: QPS WebSocket, operationId: getOpsQpsWebSocket, description: WebSocket endpoint；浏览器可用 JWT 子协议，管理员 Key 方式主要适用于非浏览器客户端。 , responses: *StandardResponses}
+  /api/v1/admin/ops/errors:
+    get: {tags: [Ops], summary: legacy 错误日志列表, operationId: listOpsErrors, responses: *StandardResponses}
+  /api/v1/admin/ops/errors/{id}:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    get: {tags: [Ops], summary: legacy 错误日志详情, operationId: getOpsError, responses: *StandardResponses}
+  /api/v1/admin/ops/errors/{id}/retries:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    get: {tags: [Ops], summary: legacy 错误重试记录, operationId: listOpsErrorRetries, responses: *StandardResponses}
+  /api/v1/admin/ops/errors/{id}/retry:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    post: {tags: [Ops], summary: 重试 legacy 错误请求, operationId: retryOpsErrorRequest, description: 可能重放请求并再次消耗上游额度。 , responses: *StandardResponses}
+  /api/v1/admin/ops/errors/{id}/resolve:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    put: {tags: [Ops], summary: 标记 legacy 错误解决状态, operationId: resolveOpsError, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/request-errors:
+    get: {tags: [Ops], summary: 请求错误列表, operationId: listOpsRequestErrors, responses: *StandardResponses}
+  /api/v1/admin/ops/request-errors/{id}:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    get: {tags: [Ops], summary: 请求错误详情, operationId: getOpsRequestError, responses: *StandardResponses}
+  /api/v1/admin/ops/request-errors/{id}/upstream-errors:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    get: {tags: [Ops], summary: 请求错误关联上游错误, operationId: listOpsRequestErrorUpstreamErrors, responses: *StandardResponses}
+  /api/v1/admin/ops/request-errors/{id}/retry-client:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    post: {tags: [Ops], summary: 重试 client-visible 请求错误, operationId: retryOpsRequestErrorClient, description: 可能重放请求并再次消耗上游额度。 , responses: *StandardResponses}
+  /api/v1/admin/ops/request-errors/{id}/upstream-errors/{idx}/retry:
+    parameters: [{$ref: '#/components/parameters/IdString'}, {$ref: '#/components/parameters/Idx'}]
+    post: {tags: [Ops], summary: 重试请求错误中的某个上游事件, operationId: retryOpsRequestErrorUpstreamEvent, description: 可能重放请求并再次消耗上游额度。 , responses: *StandardResponses}
+  /api/v1/admin/ops/request-errors/{id}/resolve:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    put: {tags: [Ops], summary: 标记请求错误解决状态, operationId: resolveOpsRequestError, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/upstream-errors:
+    get: {tags: [Ops], summary: 上游错误列表, operationId: listOpsUpstreamErrors, responses: *StandardResponses}
+  /api/v1/admin/ops/upstream-errors/{id}:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    get: {tags: [Ops], summary: 上游错误详情, operationId: getOpsUpstreamError, responses: *StandardResponses}
+  /api/v1/admin/ops/upstream-errors/{id}/retry:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    post: {tags: [Ops], summary: 重试上游错误, operationId: retryOpsUpstreamError, description: 可能重放上游请求并再次消耗额度。 , responses: *StandardResponses}
+  /api/v1/admin/ops/upstream-errors/{id}/resolve:
+    parameters: [{$ref: '#/components/parameters/IdString'}]
+    put: {tags: [Ops], summary: 标记上游错误解决状态, operationId: resolveOpsUpstreamError, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/requests:
+    get: {tags: [Ops], summary: 请求明细 drilldown, operationId: listOpsRequestDetails, responses: *StandardResponses}
+  /api/v1/admin/ops/system-logs:
+    get: {tags: [Ops], summary: 索引系统日志列表, operationId: listOpsSystemLogs, responses: *StandardResponses}
+  /api/v1/admin/ops/system-logs/cleanup:
+    post: {tags: [Ops], summary: 清理系统日志, operationId: cleanupOpsSystemLogs, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/ops/system-logs/health:
+    get: {tags: [Ops], summary: 系统日志摄取健康, operationId: getOpsSystemLogIngestionHealth, responses: *StandardResponses}
+  /api/v1/admin/ops/dashboard/snapshot-v2:
+    get: {tags: [Ops], summary: Ops dashboard 快照 v2, operationId: getOpsDashboardSnapshotV2, responses: *StandardResponses}
+  /api/v1/admin/ops/dashboard/overview:
+    get: {tags: [Ops], summary: Ops dashboard overview, operationId: getOpsDashboardOverview, responses: *StandardResponses}
+  /api/v1/admin/ops/dashboard/throughput-trend:
+    get: {tags: [Ops], summary: Ops 吞吐趋势, operationId: getOpsDashboardThroughputTrend, responses: *StandardResponses}
+  /api/v1/admin/ops/dashboard/latency-histogram:
+    get: {tags: [Ops], summary: Ops 延迟直方图, operationId: getOpsDashboardLatencyHistogram, responses: *StandardResponses}
+  /api/v1/admin/ops/dashboard/error-trend:
+    get: {tags: [Ops], summary: Ops 错误趋势, operationId: getOpsDashboardErrorTrend, responses: *StandardResponses}
+  /api/v1/admin/ops/dashboard/error-distribution:
+    get: {tags: [Ops], summary: Ops 错误分布, operationId: getOpsDashboardErrorDistribution, responses: *StandardResponses}
+  /api/v1/admin/ops/dashboard/openai-token-stats:
+    get: {tags: [Ops], summary: OpenAI token 统计, operationId: getOpsDashboardOpenAiTokenStats, responses: *StandardResponses}
+
+components:
+  securitySchemes:
+    AdminApiKey:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: 管理员 API Key，格式通常为 admin- 后接 64 位十六进制字符。
+  parameters:
+    Id: {name: id, in: path, required: true, schema: {type: integer, format: int64}, description: 数字 ID}
+    IdString: {name: id, in: path, required: true, schema: {type: string}, description: 字符串或数字 ID}
+    UserIdPath: {name: user_id, in: path, required: true, schema: {type: integer, format: int64}}
+    JobId: {name: job_id, in: path, required: true, schema: {type: string}}
+    ProfileId: {name: profile_id, in: path, required: true, schema: {type: string}}
+    SourceType: {name: source_type, in: path, required: true, schema: {type: string}}
+    Idx: {name: idx, in: path, required: true, schema: {type: integer}}
+    Page: {name: page, in: query, required: false, schema: {type: integer, minimum: 1, default: 1}}
+    PageSize: {name: page_size, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 1000, default: 20}}
+    Search: {name: search, in: query, required: false, schema: {type: string}}
+    Status: {name: status, in: query, required: false, schema: {type: string}}
+    Role: {name: role, in: query, required: false, schema: {type: string, enum: [admin, user]}}
+    Platform: {name: platform, in: query, required: false, schema: {type: string, example: anthropic}}
+    StartTime: {name: start_time, in: query, required: false, schema: {type: string}, description: RFC3339 或服务端支持的时间字符串}
+    EndTime: {name: end_time, in: query, required: false, schema: {type: string}, description: RFC3339 或服务端支持的时间字符串}
+    UserIdQuery: {name: user_id, in: query, required: false, schema: {type: integer, format: int64}}
+    ApiKeyIdQuery: {name: api_key_id, in: query, required: false, schema: {type: integer, format: int64}}
+    AccountIdQuery: {name: account_id, in: query, required: false, schema: {type: integer, format: int64}}
+    GroupIdQuery: {name: group_id, in: query, required: false, schema: {type: integer, format: int64}}
+    RequestType: {name: request_type, in: query, required: false, schema: {type: integer}, description: 请求类型过滤，具体枚举以服务端 usagestats 定义为准}
+    Stream: {name: stream, in: query, required: false, schema: {type: boolean}}
+    BillingType: {name: billing_type, in: query, required: false, schema: {type: integer}, description: 计费类型过滤，具体枚举以服务端定义为准}
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: false, schema: {type: string}, description: 写操作幂等键}
+  requestBodies:
+    FreeFormBody:
+      required: false
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/FreeFormObject'}
+    IdListBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              ids:
+                type: array
+                items: {type: integer, format: int64}
+              user_ids:
+                type: array
+                items: {type: integer, format: int64}
+              api_key_ids:
+                type: array
+                items: {type: integer, format: int64}
+          examples:
+            ids: {value: {ids: [1, 2, 3]}}
+    UserCreateBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/UserCreateRequest'}
+    UserUpdateBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/UserUpdateRequest'}
+    BalanceUpdateBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/BalanceUpdateRequest'}
+    ReplaceGroupBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ReplaceGroupRequest'}
+    AuthIdentityBindBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/AuthIdentityBindRequest'}
+    GroupBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/GroupRequest'}
+    AccountBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/AccountRequest'}
+    ProxyBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ProxyRequest'}
+    OAuthCodeBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/OAuthCodeRequest'}
+    SettingsBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/SystemSettingsPatch'}
+    S3ConfigBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/S3Config'}
+    RestoreBackupBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [password]
+            properties:
+              password: {type: string, format: password, description: 当前管理员密码}
+    DataImportBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/DataImportRequest'}
+    SubscriptionAssignBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/SubscriptionAssignRequest'}
+    AdminApiKeyUpdateBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/AdminApiKeyUpdateRequest'}
+    ChannelBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ChannelRequest'}
+  responses:
+    BadRequest: {description: 请求参数错误, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    Unauthorized: {description: 未认证或管理员 Key 无效, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    Forbidden: {description: 无权限, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    InternalError: {description: 服务端错误, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        success: {type: boolean, example: true}
+        message: {type: string}
+        data: {type: object, description: 业务数据；不同接口结构不同, nullable: true, additionalProperties: true}
+        error: {type: string, nullable: true}
+      additionalProperties: true
+    ErrorResponse:
+      type: object
+      properties:
+        success: {type: boolean, example: false}
+        error: {type: string, example: INVALID_ADMIN_KEY}
+        message: {type: string, example: Invalid admin api key}
+        code: {type: string}
+      additionalProperties: true
+    FreeFormObject:
+      type: object
+      description: 复杂 DTO 以源码 handler/service 为准；本文档保留自由对象以便 Swagger UI 实际试用。
+      additionalProperties: true
+    UserCreateRequest:
+      type: object
+      required: [username, email, password]
+      properties:
+        username: {type: string}
+        email: {type: string, format: email}
+        password: {type: string, format: password}
+        role: {type: string, enum: [admin, user]}
+        status: {type: string}
+        balance: {type: number}
+        concurrency: {type: integer}
+        rpm_limit: {type: integer, nullable: true}
+        group_ids: {type: array, items: {type: integer, format: int64}}
+      additionalProperties: true
+    UserUpdateRequest:
+      type: object
+      properties:
+        username: {type: string}
+        email: {type: string, format: email}
+        password: {type: string, format: password}
+        role: {type: string, enum: [admin, user]}
+        status: {type: string}
+        balance: {type: number}
+        concurrency: {type: integer}
+        rpm_limit: {type: integer, nullable: true}
+        group_ids: {type: array, items: {type: integer, format: int64}}
+      additionalProperties: true
+    BalanceUpdateRequest:
+      type: object
+      required: [amount]
+      properties:
+        amount: {type: number, description: 调整金额，具体是 set/add 取决于服务端请求字段}
+        type: {type: string, description: 操作类型，如 set/add/subtract，具体枚举以源码为准}
+        reason: {type: string}
+      additionalProperties: true
+    ReplaceGroupRequest:
+      type: object
+      properties:
+        group_id: {type: integer, format: int64, nullable: true}
+      additionalProperties: true
+    AuthIdentityBindRequest:
+      type: object
+      required: [provider_type, provider_key]
+      properties:
+        provider_type: {type: string, example: dingtalk}
+        provider_key: {type: string}
+        metadata: {type: object, additionalProperties: true}
+        channel: {type: object, additionalProperties: true}
+      additionalProperties: true
+    GroupRequest:
+      type: object
+      properties:
+        name: {type: string}
+        platform: {type: string, example: anthropic}
+        status: {type: string}
+        priority: {type: integer}
+        rate_multiplier: {type: number}
+        rpm_limit: {type: integer, nullable: true}
+        is_exclusive: {type: boolean}
+        supported_model_scopes: {type: array, items: {type: string}}
+      additionalProperties: true
+    AccountRequest:
+      type: object
+      properties:
+        name: {type: string}
+        platform: {type: string, example: anthropic}
+        type: {type: string, example: oauth}
+        credentials: {type: object, additionalProperties: true, description: 上游账号凭据，高敏感}
+        extra: {type: object, additionalProperties: true}
+        proxy_id: {type: integer, format: int64, nullable: true}
+        status: {type: string}
+        schedulable: {type: boolean}
+        concurrency: {type: integer}
+        priority: {type: integer}
+        group_ids: {type: array, items: {type: integer, format: int64}}
+      additionalProperties: true
+    ProxyRequest:
+      type: object
+      properties:
+        name: {type: string}
+        protocol: {type: string, example: http}
+        host: {type: string}
+        port: {type: integer}
+        username: {type: string}
+        password: {type: string, format: password}
+        status: {type: string}
+      additionalProperties: true
+    OAuthCodeRequest:
+      type: object
+      properties:
+        code: {type: string}
+        state: {type: string}
+        redirect_uri: {type: string}
+        code_verifier: {type: string}
+      additionalProperties: true
+    SystemSettingsPatch:
+      type: object
+      description: 全局系统设置。字段很多，详见 `backend/internal/handler/admin/setting_handler.go` 的 `UpdateSettingsRequest`。
+      properties:
+        registration_enabled: {type: boolean}
+        email_verify_enabled: {type: boolean}
+        password_reset_enabled: {type: boolean}
+        frontend_url: {type: string}
+        smtp_host: {type: string}
+        smtp_port: {type: integer}
+        smtp_username: {type: string}
+        smtp_password: {type: string, format: password}
+        turnstile_enabled: {type: boolean}
+        turnstile_site_key: {type: string}
+        turnstile_secret_key: {type: string, format: password}
+        oidc_connect_enabled: {type: boolean}
+        oidc_connect_client_id: {type: string}
+        oidc_connect_client_secret: {type: string, format: password}
+        github_oauth_enabled: {type: boolean}
+        google_oauth_enabled: {type: boolean}
+        default_balance: {type: number}
+        default_concurrency: {type: integer}
+        default_user_rpm_limit: {type: integer}
+        risk_control_enabled: {type: boolean}
+        enable_model_fallback: {type: boolean}
+        enable_identity_patch: {type: boolean}
+      additionalProperties: true
+    S3Config:
+      type: object
+      properties:
+        endpoint: {type: string}
+        region: {type: string}
+        bucket: {type: string}
+        access_key_id: {type: string}
+        secret_access_key: {type: string, format: password}
+        prefix: {type: string}
+      additionalProperties: true
+    DataImportRequest:
+      type: object
+      properties:
+        skip_default_group_bind: {type: boolean, default: true}
+        data:
+          type: object
+          properties:
+            type: {type: string, example: sub2api-data}
+            version: {type: integer, example: 1}
+            proxies: {type: array, items: {$ref: '#/components/schemas/ProxyRequest'}}
+            accounts: {type: array, items: {$ref: '#/components/schemas/AccountRequest'}}
+      additionalProperties: true
+    SubscriptionAssignRequest:
+      type: object
+      properties:
+        user_id: {type: integer, format: int64}
+        group_id: {type: integer, format: int64}
+        validity_days: {type: integer}
+        quota: {type: number}
+      additionalProperties: true
+    AdminApiKeyUpdateRequest:
+      type: object
+      properties:
+        group_id: {type: integer, format: int64, nullable: true, description: 目标分组；null 可解绑}
+        reset_rate_limit_usage: {type: boolean, description: true 时重置 5h/1d/7d 限速用量窗口}
+      additionalProperties: false
+    ChannelRequest:
+      type: object
+      properties:
+        name: {type: string}
+        platform: {type: string}
+        type: {type: string}
+        base_url: {type: string}
+        api_key: {type: string, format: password}
+        status: {type: string}
+        models: {type: array, items: {type: string}}
+      additionalProperties: true

@@ -1,0 +1,18 @@
+# Runtime data
+data/
+*.db
+*.db-*
+
+# Go build outputs
+backend/subadmin
+backend/bin/
+
+# Frontend dependencies and build output
+web/node_modules/
+web/dist/
+
+# Logs and local env
+*.log
+.env
+.env.*
+!.env.example
