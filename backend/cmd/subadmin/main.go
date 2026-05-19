@@ -431,42 +431,42 @@ func shellPage() string {
   <main class="shell">
     <section class="hero">
       <p class="eyebrow">subAdmin</p>
-      <h1>Management console</h1>
+      <h1>管理控制台</h1>
       <p id="intro">
-        Sign in with the subAdmin management secret. sub2api admin keys stay on the server side.
+        使用 SubAdmin 管理密钥登录。sub2api 管理员 Key 只保存在服务端。
       </p>
       <form id="login-form">
-        <label for="secret">Management secret</label>
+        <label for="secret">管理密钥</label>
         <input id="secret" name="secret" type="password" autocomplete="current-password" required />
-        <button type="submit">Sign in</button>
+        <button type="submit">登录</button>
         <p id="login-error" class="error hidden"></p>
       </form>
       <div id="console" class="hidden">
-        <div class="status"><span class="dot"></span> authenticated session active</div>
+        <div class="status"><span class="dot"></span> 已登录，会话有效</div>
         <p id="expires"></p>
-        <form id="logout-form"><button class="secondary" type="submit">Sign out</button></form>
+        <form id="logout-form"><button class="secondary" type="submit">退出登录</button></form>
         <section class="stack">
           <article class="card">
-            <h2>Sites</h2>
-            <p class="muted">Add sub2api sites. Admin keys are sent to this backend and stored encrypted.</p>
+            <h2>站点管理</h2>
+            <p class="muted">添加 sub2api 站点。管理员 Key 只发送到本后端，并加密保存。</p>
             <form id="site-form">
               <div class="row">
-                <label>Name<input name="name" required placeholder="main" /></label>
-                <label>Base URL<input name="baseUrl" required placeholder="http://127.0.0.1:8080" /></label>
+                <label>名称<input name="name" required placeholder="main" /></label>
+                <label>基础地址<input name="baseUrl" required placeholder="http://127.0.0.1:8080" /></label>
               </div>
-              <label>Admin key<input name="adminKey" type="password" required autocomplete="off" /></label>
-              <label>Note<input name="note" placeholder="optional" /></label>
+              <label>管理员 Key<input name="adminKey" type="password" required autocomplete="off" /></label>
+              <label>备注<input name="note" placeholder="可选" /></label>
               <div class="toolbar">
-                <label><input name="isDefault" type="checkbox" /> Default site</label>
-                <button type="submit">Add site</button>
-                <button class="secondary" type="button" id="refresh-sites">Refresh</button>
+                <label><input name="isDefault" type="checkbox" /> 设为默认站点</label>
+                <button type="submit">添加站点</button>
+                <button class="secondary" type="button" id="refresh-sites">刷新</button>
               </div>
               <p id="site-error" class="error hidden"></p>
             </form>
           </article>
           <article class="card">
-            <h2>Configured sites</h2>
-            <div id="site-list" class="site-list"><p class="muted">No sites loaded.</p></div>
+            <h2>已配置站点</h2>
+            <div id="site-list" class="site-list"><p class="muted">尚未加载站点。</p></div>
           </article>
         </section>
       </div>
@@ -474,16 +474,16 @@ func shellPage() string {
 
     <section class="grid">
       <article class="card">
-        <h2>Health</h2>
-        <p><code>/healthz</code> returns a JSON readiness check.</p>
+        <h2>健康检查</h2>
+        <p><code>/healthz</code> 返回 JSON 就绪状态。</p>
       </article>
       <article class="card">
-        <h2>Runtime</h2>
-        <p>This shell is the starting point for the management console UI and backend API.</p>
+        <h2>运行状态</h2>
+        <p>这个页面是管理控制台 UI 和后端 API 的起点。</p>
       </article>
       <article class="card">
-        <h2>Docs</h2>
-        <p>The API docs will be available inside the authenticated management console.</p>
+        <h2>文档</h2>
+        <p>API 文档后续会整合到登录后的管理控制台中。</p>
       </article>
     </section>
   </main>
@@ -505,14 +505,14 @@ func shellPage() string {
         ...options,
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'request failed');
+      if (!res.ok) throw new Error(data.error || '请求失败');
       return data;
     }
 
     function showAuthed(data) {
       loginForm.classList.add('hidden');
       consolePanel.classList.remove('hidden');
-      expires.textContent = data.expiresAt ? 'Session expires at ' + data.expiresAt : '';
+      expires.textContent = data.expiresAt ? '会话过期时间：' + data.expiresAt : '';
       loadSites().catch((error) => showSiteError(error.message));
     }
 
@@ -520,7 +520,7 @@ func shellPage() string {
       loginForm.classList.remove('hidden');
       consolePanel.classList.add('hidden');
       expires.textContent = '';
-      siteList.innerHTML = '<p class="muted">Sign in to load sites.</p>';
+      siteList.innerHTML = '<p class="muted">登录后加载站点。</p>';
     }
 
     function showSiteError(message) {
@@ -541,23 +541,23 @@ func shellPage() string {
       const data = await api('api/sites');
       const items = data.items || [];
       if (!items.length) {
-        siteList.innerHTML = '<p class="muted">No sites configured yet.</p>';
+        siteList.innerHTML = '<p class="muted">还没有配置站点。</p>';
         return;
       }
       siteList.innerHTML = items.map((site) => {
         const encoded = encodeURIComponent(JSON.stringify(site));
-        const badges = (site.isDefault ? '<span class="pill">default</span>' : '') + ' ' + (site.enabled ? '<span class="pill">enabled</span>' : '<span class="pill">disabled</span>');
+        const badges = (site.isDefault ? '<span class="pill">默认</span>' : '') + ' ' + (site.enabled ? '<span class="pill">启用</span>' : '<span class="pill">停用</span>');
         const note = site.note ? ' · ' + escapeHTML(site.note) : '';
         return '<div class="site-item" data-site-id="' + site.id + '">' +
           '<div class="site-title"><strong>' + escapeHTML(site.name) + '</strong><span>' + badges + '</span></div>' +
           '<p class="muted">' + escapeHTML(site.baseUrl) + '</p>' +
           '<p class="muted">Key: ' + escapeHTML(site.adminKeyHint) + note + '</p>' +
           '<div class="toolbar">' +
-            '<button class="secondary" type="button" data-action="edit" data-site="' + encoded + '">Edit</button>' +
-            '<button class="secondary" type="button" data-action="default" data-id="' + site.id + '"' + (site.isDefault ? ' disabled' : '') + '>Set default</button>' +
-            '<button class="secondary" type="button" data-action="toggle" data-id="' + site.id + '" data-enabled="' + site.enabled + '">' + (site.enabled ? 'Disable' : 'Enable') + '</button>' +
-            '<button class="secondary" type="button" data-action="test" data-id="' + site.id + '">Test</button>' +
-            '<button class="danger" type="button" data-action="delete" data-id="' + site.id + '">Delete</button>' +
+            '<button class="secondary" type="button" data-action="edit" data-site="' + encoded + '">编辑</button>' +
+            '<button class="secondary" type="button" data-action="default" data-id="' + site.id + '"' + (site.isDefault ? ' disabled' : '') + '>设为默认</button>' +
+            '<button class="secondary" type="button" data-action="toggle" data-id="' + site.id + '" data-enabled="' + site.enabled + '">' + (site.enabled ? '停用' : '启用') + '</button>' +
+            '<button class="secondary" type="button" data-action="test" data-id="' + site.id + '">测试连接</button>' +
+            '<button class="danger" type="button" data-action="delete" data-id="' + site.id + '">删除</button>' +
           '</div>' +
         '</div>';
       }).join('');
@@ -570,13 +570,13 @@ func shellPage() string {
 
     async function editSite(encodedSite) {
       const site = JSON.parse(decodeURIComponent(encodedSite));
-      const name = prompt('Site name', site.name);
+      const name = prompt('站点名称', site.name);
       if (name === null) return;
-      const baseUrl = prompt('Base URL', site.baseUrl);
+      const baseUrl = prompt('基础地址', site.baseUrl);
       if (baseUrl === null) return;
-      const note = prompt('Note', site.note || '');
+      const note = prompt('备注', site.note || '');
       if (note === null) return;
-      const adminKey = prompt('New admin key, leave empty to keep current key', '');
+      const adminKey = prompt('新的管理员 Key，留空则保持当前 Key', '');
       if (adminKey === null) return;
       const payload = { name, baseUrl, note };
       if (adminKey.trim()) payload.adminKey = adminKey;
@@ -652,10 +652,10 @@ func shellPage() string {
         }
         if (button.dataset.action === 'test') {
           const result = await api('api/sites/' + id + '/test', { method: 'POST', body: '{}' });
-          alert(result.ok ? 'Connection OK' : 'Connection failed: ' + (result.statusCode || result.error || 'unknown error'));
+          alert(result.ok ? '连接正常' : '连接失败：' + (result.statusCode || result.error || '未知错误'));
         }
         if (button.dataset.action === 'delete') {
-          if (!confirm('Delete this site?')) return;
+          if (!confirm('确定删除这个站点吗？')) return;
           await api('api/sites/' + id, { method: 'DELETE' });
           await loadSites();
         }
