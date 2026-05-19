@@ -39,7 +39,8 @@ Status:
 - Account page size selector added.
 - Default account page size changed to 10 with short client-side query cache.
 - Pagination UI now shows total pages, disables unavailable next page, and page-size changes auto-query from page 1.
-- Advanced filters and pagination controls are still pending.
+- Added a read-only account detail modal based on current list data, with client-side redaction for sensitive field names.
+- Advanced filters are still pending.
 
 ## Phase 3: Import Workflow
 - Accept uploads of sub2api-supported upstream account formats.

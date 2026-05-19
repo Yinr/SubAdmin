@@ -25,7 +25,9 @@ const accountError = ref('')
 const accounts = ref<Account[]>([])
 const activeSiteId = ref<number | null>(null)
 const editingSite = ref<Site | null>(null)
+const selectedAccount = ref<Account | null>(null)
 const showSiteModal = ref(false)
+const showAccountModal = ref(false)
 const loginLoading = ref(false)
 const sitesLoading = ref(false)
 const accountsLoading = ref(false)
@@ -258,6 +260,30 @@ function accountMeta(account: Account) {
     .join(' · ')
 }
 
+function openAccountDetail(account: Account) {
+  selectedAccount.value = account
+  showAccountModal.value = true
+}
+
+function clearAccountFilters() {
+  Object.assign(accountFilters, { search: '', platform: '', status: '' })
+  accountPager.page = 1
+  loadAccounts()
+}
+
+function redactAccountValue(key: string, value: unknown): unknown {
+  if (/credential|token|secret|password|cookie|key|authorization/i.test(key)) return '[已隐藏]'
+  if (Array.isArray(value)) return value.map((item) => redactAccountValue(key, item))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [childKey, redactAccountValue(childKey, childValue)]))
+  }
+  return value
+}
+
+function accountDetailJSON(account: Account) {
+  return JSON.stringify(redactAccountValue('account', account), null, 2)
+}
+
 onMounted(refreshMe)
 </script>
 
@@ -330,6 +356,7 @@ onMounted(refreshMe)
               </select>
             </label>
             <button type="submit" :disabled="accountsLoading">{{ accountsLoading ? '查询中...' : '查询' }}</button>
+            <button type="button" class="secondary" :disabled="accountsLoading" @click="clearAccountFilters">清空筛选</button>
           </form>
           <p v-if="accountError" class="error">{{ accountError }}</p>
           <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>
@@ -341,6 +368,7 @@ onMounted(refreshMe)
                   <th>平台/状态</th>
                   <th>分组/优先级</th>
                   <th>备注</th>
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -349,9 +377,10 @@ onMounted(refreshMe)
                   <td>{{ [account.platform, account.status].filter(Boolean).join(' / ') || '未知' }}</td>
                   <td>{{ [account.group_name, account.priority !== undefined ? `优先级 ${account.priority}` : ''].filter(Boolean).join(' / ') || '未知' }}</td>
                   <td>{{ account.note || account.remark || account.description || '无' }}</td>
+                  <td><button class="secondary" @click="openAccountDetail(account)">详情</button></td>
                 </tr>
                 <tr v-if="!accounts.length">
-                  <td colspan="4" class="muted">{{ accountPager.loaded ? '没有匹配的账号。' : '请选择站点并查询账号。' }}</td>
+                  <td colspan="5" class="muted">{{ accountPager.loaded ? '没有匹配的账号。' : '请选择站点并查询账号。' }}</td>
                 </tr>
               </tbody>
             </table>
@@ -383,6 +412,23 @@ onMounted(refreshMe)
           <button type="submit" :disabled="savingSite">{{ savingSite ? '保存中...' : '保存' }}</button>
         </div>
       </form>
+    </div>
+
+    <div v-if="showAccountModal && selectedAccount" class="modal-mask">
+      <section class="modal-card detail-card">
+        <h2>账号详情</h2>
+        <p class="muted">来自当前列表结果，敏感字段已隐藏。</p>
+        <div class="detail-grid">
+          <span>名称</span><strong>{{ accountName(selectedAccount) }}</strong>
+          <span>平台</span><strong>{{ selectedAccount.platform || '未知' }}</strong>
+          <span>状态</span><strong>{{ selectedAccount.status || '未知' }}</strong>
+          <span>优先级</span><strong>{{ selectedAccount.priority ?? '未知' }}</strong>
+        </div>
+        <pre class="detail-json">{{ accountDetailJSON(selectedAccount) }}</pre>
+        <div class="modal-actions">
+          <button type="button" class="secondary" @click="showAccountModal = false">关闭</button>
+        </div>
+      </section>
     </div>
   </main>
 </template>
@@ -433,6 +479,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .account-table th,
 .account-table td { padding: 12px 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); text-align: left; vertical-align: top; }
 .account-table th { color: #cbd5e1; font-size: 14px; }
+.account-table td:last-child { white-space: nowrap; }
 .pager { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
 .site-card, .account-card { padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(15, 23, 42, 0.58); }
 .site-card.active { border-color: rgba(196, 181, 253, 0.72); }
@@ -441,6 +488,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .actions, .modal-actions, .check-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
 .modal-mask { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(2, 6, 23, 0.72); }
 .modal-card { width: min(560px, 100%); padding: 22px; }
+.detail-card { width: min(820px, 100%); max-height: calc(100vh - 56px); overflow: auto; }
+.detail-grid { display: grid; grid-template-columns: 110px 1fr; gap: 10px 14px; margin: 16px 0; }
+.detail-grid span { color: #94a3b8; }
+.detail-json { overflow: auto; max-height: 360px; padding: 14px; border-radius: 14px; background: rgba(2, 6, 23, 0.55); color: #dbeafe; font-size: 12px; line-height: 1.55; }
 .modal-actions { justify-content: flex-end; }
 @media (max-width: 900px) {
   .layout-grid { grid-template-columns: 1fr; }
