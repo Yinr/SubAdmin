@@ -545,6 +545,7 @@ func shellPage() string {
         return;
       }
       siteList.innerHTML = items.map((site) => {
+        const encoded = encodeURIComponent(JSON.stringify(site));
         const badges = (site.isDefault ? '<span class="pill">default</span>' : '') + ' ' + (site.enabled ? '<span class="pill">enabled</span>' : '<span class="pill">disabled</span>');
         const note = site.note ? ' · ' + escapeHTML(site.note) : '';
         return '<div class="site-item" data-site-id="' + site.id + '">' +
@@ -552,11 +553,34 @@ func shellPage() string {
           '<p class="muted">' + escapeHTML(site.baseUrl) + '</p>' +
           '<p class="muted">Key: ' + escapeHTML(site.adminKeyHint) + note + '</p>' +
           '<div class="toolbar">' +
+            '<button class="secondary" type="button" data-action="edit" data-site="' + encoded + '">Edit</button>' +
+            '<button class="secondary" type="button" data-action="default" data-id="' + site.id + '"' + (site.isDefault ? ' disabled' : '') + '>Set default</button>' +
+            '<button class="secondary" type="button" data-action="toggle" data-id="' + site.id + '" data-enabled="' + site.enabled + '">' + (site.enabled ? 'Disable' : 'Enable') + '</button>' +
             '<button class="secondary" type="button" data-action="test" data-id="' + site.id + '">Test</button>' +
             '<button class="danger" type="button" data-action="delete" data-id="' + site.id + '">Delete</button>' +
           '</div>' +
         '</div>';
       }).join('');
+    }
+
+    async function patchSite(id, payload) {
+      await api('api/sites/' + id, { method: 'PATCH', body: JSON.stringify(payload) });
+      await loadSites();
+    }
+
+    async function editSite(encodedSite) {
+      const site = JSON.parse(decodeURIComponent(encodedSite));
+      const name = prompt('Site name', site.name);
+      if (name === null) return;
+      const baseUrl = prompt('Base URL', site.baseUrl);
+      if (baseUrl === null) return;
+      const note = prompt('Note', site.note || '');
+      if (note === null) return;
+      const adminKey = prompt('New admin key, leave empty to keep current key', '');
+      if (adminKey === null) return;
+      const payload = { name, baseUrl, note };
+      if (adminKey.trim()) payload.adminKey = adminKey;
+      await patchSite(site.id, payload);
     }
 
     async function refreshMe() {
@@ -617,6 +641,15 @@ func shellPage() string {
       hideSiteError();
       const id = button.dataset.id;
       try {
+        if (button.dataset.action === 'edit') {
+          await editSite(button.dataset.site);
+        }
+        if (button.dataset.action === 'default') {
+          await patchSite(id, { isDefault: true });
+        }
+        if (button.dataset.action === 'toggle') {
+          await patchSite(id, { enabled: button.dataset.enabled !== 'true' });
+        }
         if (button.dataset.action === 'test') {
           const result = await api('api/sites/' + id + '/test', { method: 'POST', body: '{}' });
           alert(result.ok ? 'Connection OK' : 'Connection failed: ' + (result.statusCode || result.error || 'unknown error'));

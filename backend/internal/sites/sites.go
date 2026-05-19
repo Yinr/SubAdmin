@@ -74,7 +74,7 @@ FROM sites ORDER BY is_default DESC, id ASC
 	}
 	defer rows.Close()
 
-	var result []Site
+	result := []Site{}
 	for rows.Next() {
 		site, err := scanSite(rows)
 		if err != nil {
