@@ -21,6 +21,7 @@ Status:
 - Site admin keys are encrypted before storage.
 - Site connectivity test API added.
 - UI site management panel added in the shell.
+- Vue-based site management UI added with modal form.
 
 ## Phase 2: Account Listing
 - List upstream accounts for the selected site.
