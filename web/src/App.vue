@@ -26,6 +26,10 @@ const accounts = ref<Account[]>([])
 const activeSiteId = ref<number | null>(null)
 const editingSite = ref<Site | null>(null)
 const showSiteModal = ref(false)
+const loginLoading = ref(false)
+const sitesLoading = ref(false)
+const accountsLoading = ref(false)
+const savingSite = ref(false)
 
 const siteForm = reactive({
   name: '',
@@ -68,12 +72,15 @@ async function refreshMe() {
 
 async function login() {
   loginError.value = ''
+  loginLoading.value = true
   try {
     await api('api/auth/login', { method: 'POST', body: JSON.stringify({ secret: loginSecret.value }) })
     loginSecret.value = ''
     await refreshMe()
   } catch (error) {
     loginError.value = error instanceof Error ? error.message : '登录失败'
+  } finally {
+    loginLoading.value = false
   }
 }
 
@@ -87,10 +94,17 @@ async function logout() {
 
 async function loadSites() {
   siteError.value = ''
-  const data = await api<{ items: Site[] }>('api/sites')
-  sites.value = data.items || []
-  if (!activeSiteId.value && sites.value.length) {
-    activeSiteId.value = (sites.value.find((site) => site.isDefault) || sites.value[0]).id
+  sitesLoading.value = true
+  try {
+    const data = await api<{ items: Site[] }>('api/sites')
+    sites.value = data.items || []
+    if (!activeSiteId.value && sites.value.length) {
+      activeSiteId.value = (sites.value.find((site) => site.isDefault) || sites.value[0]).id
+    }
+  } catch (error) {
+    siteError.value = error instanceof Error ? error.message : '加载站点失败'
+  } finally {
+    sitesLoading.value = false
   }
 }
 
@@ -115,6 +129,7 @@ function openEditSite(site: Site) {
 
 async function saveSite() {
   siteError.value = ''
+  savingSite.value = true
   try {
     const payload: Record<string, unknown> = { ...siteForm }
     if (editingSite.value && !String(payload.adminKey || '').trim()) delete payload.adminKey
@@ -127,6 +142,8 @@ async function saveSite() {
     await loadSites()
   } catch (error) {
     siteError.value = error instanceof Error ? error.message : '保存站点失败'
+  } finally {
+    savingSite.value = false
   }
 }
 
@@ -169,6 +186,7 @@ async function loadAccounts() {
     accountError.value = '请先选择站点'
     return
   }
+  accountsLoading.value = true
   const params = new URLSearchParams({ page: String(accountPager.page), page_size: String(accountPager.pageSize) })
   Object.entries(accountFilters).forEach(([key, value]) => {
     if (value.trim()) params.set(key, value.trim())
@@ -179,6 +197,8 @@ async function loadAccounts() {
     accountPager.total = Number(payload.total || payload.data?.total || 0)
   } catch (error) {
     accountError.value = error instanceof Error ? error.message : '查询账号失败'
+  } finally {
+    accountsLoading.value = false
   }
 }
 
@@ -219,7 +239,7 @@ onMounted(refreshMe)
       <p class="muted">使用管理密钥登录。sub2api 管理员 Key 只保存在服务端。</p>
       <form @submit.prevent="login" class="form-block">
         <label>管理密钥<input v-model="loginSecret" type="password" autocomplete="current-password" required /></label>
-        <button type="submit">登录</button>
+        <button type="submit" :disabled="loginLoading">{{ loginLoading ? '登录中...' : '登录' }}</button>
         <p v-if="loginError" class="error">{{ loginError }}</p>
       </form>
     </section>
@@ -241,6 +261,7 @@ onMounted(refreshMe)
             <button @click="openCreateSite">新增</button>
           </div>
           <p v-if="siteError" class="error">{{ siteError }}</p>
+          <p v-if="sitesLoading" class="muted">正在加载站点...</p>
           <div class="site-list">
             <article v-for="site in sites" :key="site.id" class="site-card" :class="{ active: site.id === activeSiteId }">
               <div class="site-title">
@@ -271,9 +292,17 @@ onMounted(refreshMe)
             <label>搜索<input v-model="accountFilters.search" placeholder="名称、备注或标识" /></label>
             <label>平台<input v-model="accountFilters.platform" placeholder="openai / claude / gemini" /></label>
             <label>状态<input v-model="accountFilters.status" placeholder="active" /></label>
-            <button type="submit">查询</button>
+            <label>每页数量
+              <select v-model.number="accountPager.pageSize">
+                <option :value="10">10</option>
+                <option :value="20">20</option>
+                <option :value="50">50</option>
+              </select>
+            </label>
+            <button type="submit" :disabled="accountsLoading">{{ accountsLoading ? '查询中...' : '查询' }}</button>
           </form>
           <p v-if="accountError" class="error">{{ accountError }}</p>
+          <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>
           <div class="table-wrap">
             <table class="account-table">
               <thead>
@@ -298,9 +327,9 @@ onMounted(refreshMe)
             </table>
           </div>
           <div class="pager">
-            <button class="secondary" :disabled="accountPager.page <= 1" @click="goPrevAccounts">上一页</button>
+            <button class="secondary" :disabled="accountPager.page <= 1 || accountsLoading" @click="goPrevAccounts">上一页</button>
             <span class="muted">第 {{ accountPager.page }} 页</span>
-            <button class="secondary" @click="goNextAccounts">下一页</button>
+            <button class="secondary" :disabled="accountsLoading" @click="goNextAccounts">下一页</button>
             <span v-if="accountPager.total" class="muted">共 {{ accountPager.total }} 条</span>
           </div>
         </section>
@@ -321,7 +350,7 @@ onMounted(refreshMe)
         <p v-if="siteError" class="error">{{ siteError }}</p>
         <div class="modal-actions">
           <button type="button" class="secondary" @click="showSiteModal = false">取消</button>
-          <button type="submit">保存</button>
+          <button type="submit" :disabled="savingSite">{{ savingSite ? '保存中...' : '保存' }}</button>
         </div>
       </form>
     </div>
@@ -357,7 +386,7 @@ h1, h2 { margin: 0; }
 .form-block, .filter-grid, .modal-card { display: grid; gap: 14px; }
 .filter-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
 label { display: grid; gap: 7px; color: #cbd5e1; font-size: 14px; }
-input {
+input, select {
   width: 100%; box-sizing: border-box; padding: 12px 13px; border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 12px; color: #f8fafc; background: rgba(15, 23, 42, 0.86); outline: none;
 }
