@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 
 type Site = {
   id: number
@@ -50,10 +50,17 @@ const accountPager = reactive({
   page: 1,
   pageSize: 10,
   total: 0,
+  loaded: false,
 })
 
 const accountCache = new Map<string, { expiresAt: number; payload: any }>()
 let accountRequestSeq = 0
+
+const accountTotalPages = computed(() => (accountPager.total ? Math.ceil(accountPager.total / accountPager.pageSize) : 0))
+const hasNextAccountPage = computed(() => {
+  if (accountPager.total) return accountPager.page < accountTotalPages.value
+  return accounts.value.length >= accountPager.pageSize
+})
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
@@ -93,6 +100,7 @@ async function logout() {
   sites.value = []
   accounts.value = []
   activeSiteId.value = null
+  accountPager.loaded = false
 }
 
 async function loadSites() {
@@ -183,7 +191,7 @@ function normalizeAccounts(payload: any): Account[] {
   return []
 }
 
-async function loadAccounts() {
+async function loadAccounts(options: { force?: boolean } = {}) {
   accountError.value = ''
   if (!activeSiteId.value) {
     accountError.value = '请先选择站点'
@@ -196,9 +204,10 @@ async function loadAccounts() {
   })
   const cacheKey = `${activeSiteId.value}?${params.toString()}`
   const cached = accountCache.get(cacheKey)
-  if (cached && cached.expiresAt > Date.now()) {
+  if (!options.force && cached && cached.expiresAt > Date.now()) {
     accounts.value = normalizeAccounts(cached.payload)
     accountPager.total = Number(cached.payload.total || cached.payload.data?.total || 0)
+    accountPager.loaded = true
     return
   }
   accountsLoading.value = true
@@ -208,6 +217,7 @@ async function loadAccounts() {
     accountCache.set(cacheKey, { expiresAt: Date.now() + 8000, payload })
     accounts.value = normalizeAccounts(payload)
     accountPager.total = Number(payload.total || payload.data?.total || 0)
+    accountPager.loaded = true
   } catch (error) {
     if (requestSeq !== accountRequestSeq) return
     accountError.value = error instanceof Error ? error.message : '查询账号失败'
@@ -221,6 +231,11 @@ function submitAccountFilters() {
   loadAccounts()
 }
 
+function changeAccountPageSize() {
+  accountPager.page = 1
+  loadAccounts()
+}
+
 function goPrevAccounts() {
   if (accountPager.page <= 1) return
   accountPager.page -= 1
@@ -228,6 +243,7 @@ function goPrevAccounts() {
 }
 
 function goNextAccounts() {
+  if (!hasNextAccountPage.value) return
   accountPager.page += 1
   loadAccounts()
 }
@@ -300,14 +316,14 @@ onMounted(refreshMe)
         <section class="panel content-panel">
           <div class="panel-head">
             <h2>上游账号</h2>
-            <button class="secondary" @click="loadAccounts">刷新</button>
+            <button class="secondary" :disabled="accountsLoading" @click="loadAccounts({ force: true })">刷新</button>
           </div>
           <form class="filter-grid" @submit.prevent="submitAccountFilters">
             <label>搜索<input v-model="accountFilters.search" placeholder="名称、备注或标识" /></label>
             <label>平台<input v-model="accountFilters.platform" placeholder="openai / claude / gemini" /></label>
             <label>状态<input v-model="accountFilters.status" placeholder="active" /></label>
             <label>每页数量
-              <select v-model.number="accountPager.pageSize">
+              <select v-model.number="accountPager.pageSize" @change="changeAccountPageSize">
                 <option :value="10">10</option>
                 <option :value="20">20</option>
                 <option :value="50">50</option>
@@ -335,15 +351,15 @@ onMounted(refreshMe)
                   <td>{{ account.note || account.remark || account.description || '无' }}</td>
                 </tr>
                 <tr v-if="!accounts.length">
-                  <td colspan="4" class="muted">请选择站点并查询账号。</td>
+                  <td colspan="4" class="muted">{{ accountPager.loaded ? '没有匹配的账号。' : '请选择站点并查询账号。' }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
           <div class="pager">
             <button class="secondary" :disabled="accountPager.page <= 1 || accountsLoading" @click="goPrevAccounts">上一页</button>
-            <span class="muted">第 {{ accountPager.page }} 页</span>
-            <button class="secondary" :disabled="accountsLoading" @click="goNextAccounts">下一页</button>
+            <span class="muted">第 {{ accountPager.page }} 页<span v-if="accountTotalPages"> / 共 {{ accountTotalPages }} 页</span></span>
+            <button class="secondary" :disabled="!hasNextAccountPage || accountsLoading" @click="goNextAccounts">下一页</button>
             <span v-if="accountPager.total" class="muted">共 {{ accountPager.total }} 条</span>
           </div>
         </section>

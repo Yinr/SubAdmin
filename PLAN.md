@@ -38,6 +38,7 @@ Status:
 - Account results now use a table layout with basic pagination controls.
 - Account page size selector added.
 - Default account page size changed to 10 with short client-side query cache.
+- Pagination UI now shows total pages, disables unavailable next page, and page-size changes auto-query from page 1.
 - Advanced filters and pagination controls are still pending.
 
 ## Phase 3: Import Workflow
