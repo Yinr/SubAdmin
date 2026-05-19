@@ -42,6 +42,12 @@ const accountFilters = reactive({
   status: '',
 })
 
+const accountPager = reactive({
+  page: 1,
+  pageSize: 20,
+  total: 0,
+})
+
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     credentials: 'same-origin',
@@ -163,16 +169,33 @@ async function loadAccounts() {
     accountError.value = '请先选择站点'
     return
   }
-  const params = new URLSearchParams({ page: '1', page_size: '20' })
+  const params = new URLSearchParams({ page: String(accountPager.page), page_size: String(accountPager.pageSize) })
   Object.entries(accountFilters).forEach(([key, value]) => {
     if (value.trim()) params.set(key, value.trim())
   })
   try {
     const payload = await api<any>(`api/sites/${activeSiteId.value}/accounts?${params.toString()}`)
     accounts.value = normalizeAccounts(payload)
+    accountPager.total = Number(payload.total || payload.data?.total || 0)
   } catch (error) {
     accountError.value = error instanceof Error ? error.message : '查询账号失败'
   }
+}
+
+function submitAccountFilters() {
+  accountPager.page = 1
+  loadAccounts()
+}
+
+function goPrevAccounts() {
+  if (accountPager.page <= 1) return
+  accountPager.page -= 1
+  loadAccounts()
+}
+
+function goNextAccounts() {
+  accountPager.page += 1
+  loadAccounts()
 }
 
 function accountName(account: Account) {
@@ -244,26 +267,47 @@ onMounted(refreshMe)
             <h2>上游账号</h2>
             <button class="secondary" @click="loadAccounts">刷新</button>
           </div>
-          <form class="filter-grid" @submit.prevent="loadAccounts">
+          <form class="filter-grid" @submit.prevent="submitAccountFilters">
             <label>搜索<input v-model="accountFilters.search" placeholder="名称、备注或标识" /></label>
             <label>平台<input v-model="accountFilters.platform" placeholder="openai / claude / gemini" /></label>
             <label>状态<input v-model="accountFilters.status" placeholder="active" /></label>
             <button type="submit">查询</button>
           </form>
           <p v-if="accountError" class="error">{{ accountError }}</p>
-          <div class="account-list">
-            <article v-for="account in accounts" :key="String(account.id || accountName(account))" class="account-card">
-              <strong>{{ accountName(account) }}</strong>
-              <p class="muted">{{ accountMeta(account) }}</p>
-              <p v-if="account.note || account.remark || account.description" class="muted">{{ account.note || account.remark || account.description }}</p>
-            </article>
-            <p v-if="!accounts.length" class="muted">请选择站点并查询账号。</p>
+          <div class="table-wrap">
+            <table class="account-table">
+              <thead>
+                <tr>
+                  <th>名称</th>
+                  <th>平台/状态</th>
+                  <th>分组/优先级</th>
+                  <th>备注</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="account in accounts" :key="String(account.id || accountName(account))">
+                  <td>{{ accountName(account) }}</td>
+                  <td>{{ [account.platform, account.status].filter(Boolean).join(' / ') || '未知' }}</td>
+                  <td>{{ [account.group_name, account.priority !== undefined ? `优先级 ${account.priority}` : ''].filter(Boolean).join(' / ') || '未知' }}</td>
+                  <td>{{ account.note || account.remark || account.description || '无' }}</td>
+                </tr>
+                <tr v-if="!accounts.length">
+                  <td colspan="4" class="muted">请选择站点并查询账号。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="pager">
+            <button class="secondary" :disabled="accountPager.page <= 1" @click="goPrevAccounts">上一页</button>
+            <span class="muted">第 {{ accountPager.page }} 页</span>
+            <button class="secondary" @click="goNextAccounts">下一页</button>
+            <span v-if="accountPager.total" class="muted">共 {{ accountPager.total }} 条</span>
           </div>
         </section>
       </div>
     </section>
 
-    <div v-if="showSiteModal" class="modal-mask" @click.self="showSiteModal = false">
+    <div v-if="showSiteModal" class="modal-mask">
       <form class="modal-card" @submit.prevent="saveSite">
         <h2>{{ editingSite ? '编辑站点' : '新增站点' }}</h2>
         <label>名称<input v-model="siteForm.name" required /></label>
@@ -325,6 +369,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .secondary { background: rgba(148, 163, 184, 0.14); color: #e2e8f0; }
 .danger { background: rgba(239, 68, 68, 0.16); color: #fecaca; }
 .site-list, .account-list { display: grid; gap: 12px; }
+.table-wrap { overflow-x: auto; margin-top: 12px; }
+.account-table { width: 100%; min-width: 720px; border-collapse: collapse; }
+.account-table th,
+.account-table td { padding: 12px 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); text-align: left; vertical-align: top; }
+.account-table th { color: #cbd5e1; font-size: 14px; }
+.pager { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
 .site-card, .account-card { padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(15, 23, 42, 0.58); }
 .site-card.active { border-color: rgba(196, 181, 253, 0.72); }
 .site-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; }

@@ -22,6 +22,7 @@ Status:
 - Site connectivity test API added.
 - UI site management panel added in the shell.
 - Vue-based site management UI added with modal form.
+- Site modal no longer closes from backdrop clicks to avoid losing edits.
 
 ## Phase 2: Account Listing
 - List upstream accounts for the selected site.
@@ -33,6 +34,7 @@ Status:
 
 - Backend account-list proxy added for each site.
 - Minimal account query UI added with search, platform, and status fields.
+- Account results now use a table layout with basic pagination controls.
 - Advanced filters and pagination controls are still pending.
 
 ## Phase 3: Import Workflow
