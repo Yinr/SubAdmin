@@ -62,6 +62,7 @@ const accountFilters = reactive({
   status: '',
   type: '',
   privacyMode: '',
+  upstreamGroup: '',
   sortBy: 'name',
   sortOrder: 'asc',
 })
@@ -115,6 +116,8 @@ const visibleAccounts = computed(() => {
 const groupFilterItems = computed(() => groupOptions.value.filter((group) => groupState(group.id) !== 'any'))
 
 const addableGroupOptions = computed(() => groupOptions.value.filter((group) => groupState(group.id) === 'any'))
+
+const upstreamGroupOptions = computed(() => [{ id: 'ungrouped', name: '未分组' }, ...groupOptions.value])
 
 const selectedAccountCount = computed(() => selectedAccountIds.value.size)
 
@@ -345,6 +348,7 @@ const activeAccountFilters = computed(() => {
     accountFilters.status && `状态: ${accountFilters.status}`,
     accountFilters.type && `类型: ${accountFilters.type}`,
     accountFilters.privacyMode && `隐私: ${accountFilters.privacyMode}`,
+    accountFilters.upstreamGroup && `上游分组: ${accountFilters.upstreamGroup}`,
     accountFilters.sortBy !== 'name' && `排序: ${accountFilters.sortBy}`,
     accountFilters.sortOrder !== 'asc' && `方向: ${accountFilters.sortOrder}`,
     scheduleQuickFilter.value !== 'all' && `调度: ${scheduleQuickFilter.value}`,
@@ -366,6 +370,10 @@ async function loadAccounts(options: { force?: boolean } = {}) {
     if (!trimmed) return
     if (key === 'privacyMode') {
       params.set('privacy_mode', trimmed)
+      return
+    }
+    if (key === 'upstreamGroup') {
+      params.set('group', trimmed)
       return
     }
     params.set(key, trimmed)
@@ -604,7 +612,7 @@ function openAccountDetail(account: Account) {
 }
 
 function clearAccountFilters() {
-  Object.assign(accountFilters, { search: '', platform: '', status: '', type: '', privacyMode: '', sortBy: 'name', sortOrder: 'asc' })
+  Object.assign(accountFilters, { search: '', platform: '', status: '', type: '', privacyMode: '', upstreamGroup: '', sortBy: 'name', sortOrder: 'asc' })
   scheduleQuickFilter.value = 'all'
   resetGroupFilters()
   accountPager.page = 1
@@ -852,6 +860,12 @@ onMounted(refreshMe)
                 <option value="__unset__">未设置</option>
               </select>
             </label>
+            <label>上游分组
+              <select v-model="accountFilters.upstreamGroup">
+                <option value="">全部</option>
+                <option v-for="group in upstreamGroupOptions" :key="group.id" :value="group.id">{{ group.name }}</option>
+              </select>
+            </label>
             <label>排序字段
               <select v-model="accountFilters.sortBy">
                 <option value="name">名称</option>
@@ -881,7 +895,7 @@ onMounted(refreshMe)
           <section class="local-filter">
             <div class="filter-note compact">
               <strong>当前页本地筛选</strong>
-              <span>以下条件只过滤当前已加载结果，不会重新请求上游，也不代表全库命中数量。</span>
+              <span>以下条件只过滤当前已加载结果。需要先按单个分组缩小范围时，请用上方“上游分组”。</span>
             </div>
             <label>调度状态
               <select v-model="scheduleQuickFilter">

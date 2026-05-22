@@ -54,6 +54,7 @@ Completed:
 - Account detail modal based on the current list result, with redacted JSON.
 - Fixed option filters for platform, status, type, privacy mode, sorting, page size, and scheduling state.
 - Read-only groups proxy per site.
+- Upstream single-group filtering sends sub2api's supported `group` query parameter before local filtering.
 - Multi-group local tri-state filtering on the current result set:
   - include: account must contain the group.
   - exclude: account must not contain the group.
@@ -94,6 +95,7 @@ Completed:
 Next:
 
 - Promote batch tests into persisted Jobs with retry and history.
+- Add retry-failed and copy-failed-account-ids helpers for batch test results.
 
 ## Phase 5: Import Preview Workflow
 
@@ -158,4 +160,4 @@ Status: ongoing.
 
 ## Immediate Next Step
 
-Implement Phase 4 minimal batch account testing for selected accounts. Keep it conservative and do not modify upstream account data.
+Improve account filtering by adding upstream single-group filtering while keeping local tri-state group filtering for current-page refinement.
