@@ -14,6 +14,8 @@ type Site = {
 }
 
 type Account = Record<string, unknown>
+type Group = Record<string, unknown>
+type GroupState = 'any' | 'include' | 'exclude'
 
 const authed = ref(false)
 const expiresAt = ref('')
@@ -23,6 +25,7 @@ const sites = ref<Site[]>([])
 const siteError = ref('')
 const accountError = ref('')
 const accounts = ref<Account[]>([])
+const groups = ref<Group[]>([])
 const activeSiteId = ref<number | null>(null)
 const editingSite = ref<Site | null>(null)
 const selectedAccount = ref<Account | null>(null)
@@ -31,6 +34,7 @@ const showAccountModal = ref(false)
 const loginLoading = ref(false)
 const sitesLoading = ref(false)
 const accountsLoading = ref(false)
+const groupsLoading = ref(false)
 const savingSite = ref(false)
 
 const siteForm = reactive({
@@ -47,11 +51,13 @@ const accountFilters = reactive({
   platform: '',
   status: '',
   type: '',
-  group: '',
   privacyMode: '',
   sortBy: 'name',
   sortOrder: 'asc',
 })
+
+const scheduleQuickFilter = ref('all')
+const groupFilterStates = reactive<Record<string, GroupState>>({})
 
 const accountPager = reactive({
   page: 1,
@@ -67,6 +73,26 @@ const accountTotalPages = computed(() => (accountPager.total ? Math.ceil(account
 const hasNextAccountPage = computed(() => {
   if (accountPager.total) return accountPager.page < accountTotalPages.value
   return accounts.value.length >= accountPager.pageSize
+})
+
+const groupOptions = computed(() => {
+  const values = new Map<string, { id: string; name: string }>()
+  groups.value.forEach((group) => {
+    const id = String(group.id || '').trim()
+    if (!id) return
+    values.set(id, { id, name: String(group.name || `分组 #${id}`) })
+  })
+  accounts.value.forEach((account) => {
+    accountGroupEntries(account).forEach((group) => values.set(group.id, group))
+  })
+  return Array.from(values.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+})
+
+const visibleAccounts = computed(() => {
+  return accounts.value.filter((account) => {
+    if (scheduleQuickFilter.value !== 'all' && accountScheduleKey(account) !== scheduleQuickFilter.value) return false
+    return matchesGroupFilters(account)
+  })
 })
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -118,6 +144,7 @@ async function loadSites() {
     sites.value = data.items || []
     if (!activeSiteId.value && sites.value.length) {
       activeSiteId.value = (sites.value.find((site) => site.isDefault) || sites.value[0]).id
+      await loadGroups()
     }
   } catch (error) {
     siteError.value = error instanceof Error ? error.message : '加载站点失败'
@@ -185,7 +212,31 @@ async function testSite(site: Site) {
 
 function selectSite(site: Site) {
   activeSiteId.value = site.id
+  groups.value = []
+  resetGroupFilters()
+  loadGroups()
   loadAccounts()
+}
+
+function normalizeGroups(payload: any): Group[] {
+  if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload.data)) return payload.data
+  if (payload.data && Array.isArray(payload.data.items)) return payload.data.items
+  if (Array.isArray(payload.items)) return payload.items
+  return []
+}
+
+async function loadGroups() {
+  if (!activeSiteId.value) return
+  groupsLoading.value = true
+  try {
+    const payload = await api<any>(`api/sites/${activeSiteId.value}/groups`)
+    groups.value = normalizeGroups(payload)
+  } catch {
+    groups.value = []
+  } finally {
+    groupsLoading.value = false
+  }
 }
 
 function normalizeAccounts(payload: any): Account[] {
@@ -210,10 +261,11 @@ const activeAccountFilters = computed(() => {
     accountFilters.platform && `平台: ${accountFilters.platform}`,
     accountFilters.status && `状态: ${accountFilters.status}`,
     accountFilters.type && `类型: ${accountFilters.type}`,
-    accountFilters.group && `分组: ${accountFilters.group}`,
     accountFilters.privacyMode && `隐私: ${accountFilters.privacyMode}`,
     accountFilters.sortBy !== 'name' && `排序: ${accountFilters.sortBy}`,
     accountFilters.sortOrder !== 'asc' && `方向: ${accountFilters.sortOrder}`,
+    scheduleQuickFilter.value !== 'all' && `调度: ${scheduleQuickFilter.value}`,
+    ...activeGroupFilters(),
   ].filter(Boolean)
   return parts.join(' · ')
 })
@@ -287,13 +339,64 @@ function accountName(account: Account) {
 }
 
 function accountGroups(account: Account) {
+  const names = accountGroupEntries(account).map((group) => group.name)
+  return names.length ? names.join(' / ') : '未分组'
+}
+
+function accountGroupEntries(account: Account) {
   const groups = Array.isArray(account.groups) ? account.groups : []
   const accountGroups = Array.isArray(account.account_groups) ? account.account_groups : []
-  const names = groups
-    .map((group: any) => group?.name)
-    .concat(accountGroups.map((item: any) => item?.group?.name))
+  const entries = groups
+    .map((group: any) => ({ id: String(group?.id || '').trim(), name: String(group?.name || '').trim() }))
+    .concat(accountGroups.map((item: any) => ({ id: String(item?.group?.id || item?.group_id || '').trim(), name: String(item?.group?.name || '').trim() })))
+    .filter((group) => group.id || group.name)
+  const unique = new Map<string, { id: string; name: string }>()
+  entries.forEach((group) => {
+    const id = group.id || group.name
+    unique.set(id, { id, name: group.name || `分组 #${id}` })
+  })
+  return Array.from(unique.values())
+}
+
+function accountGroupIDs(account: Account) {
+  const ids = accountGroupEntries(account).map((group) => group.id).filter(Boolean)
+  return new Set(ids)
+}
+
+function groupState(id: string): GroupState {
+  return groupFilterStates[id] || 'any'
+}
+
+function setGroupState(id: string, state: GroupState) {
+  if (state === 'any') {
+    delete groupFilterStates[id]
+    return
+  }
+  groupFilterStates[id] = state
+}
+
+function matchesGroupFilters(account: Account) {
+  const accountGroups = accountGroupIDs(account)
+  return Object.entries(groupFilterStates).every(([id, state]) => {
+    if (state === 'include') return accountGroups.has(id)
+    if (state === 'exclude') return !accountGroups.has(id)
+    return true
+  })
+}
+
+function activeGroupFilters() {
+  return groupOptions.value
+    .map((group) => {
+      const state = groupState(group.id)
+      if (state === 'include') return `包含分组: ${group.name}`
+      if (state === 'exclude') return `排除分组: ${group.name}`
+      return ''
+    })
     .filter(Boolean)
-  return names.length ? names.join(' / ') : '未分组'
+}
+
+function resetGroupFilters() {
+  Object.keys(groupFilterStates).forEach((key) => delete groupFilterStates[key])
 }
 
 function accountProxy(account: Account) {
@@ -308,6 +411,14 @@ function accountSchedule(account: Account) {
   if (account.overload_until) return '过载冷却'
   if (account.rate_limit_reset_at) return '限流中'
   return '可调度'
+}
+
+function accountScheduleKey(account: Account) {
+  if (account.temp_unschedulable_until) return 'temp'
+  if (account.schedulable === false) return 'blocked'
+  if (account.overload_until) return 'overload'
+  if (account.rate_limit_reset_at) return 'rate'
+  return 'ready'
 }
 
 function accountUsage(account: Account) {
@@ -330,7 +441,9 @@ function openAccountDetail(account: Account) {
 }
 
 function clearAccountFilters() {
-  Object.assign(accountFilters, { search: '', platform: '', status: '', type: '', group: '', privacyMode: '', sortBy: 'name', sortOrder: 'asc' })
+  Object.assign(accountFilters, { search: '', platform: '', status: '', type: '', privacyMode: '', sortBy: 'name', sortOrder: 'asc' })
+  scheduleQuickFilter.value = 'all'
+  resetGroupFilters()
   accountPager.page = 1
   loadAccounts()
 }
@@ -410,11 +523,48 @@ onMounted(refreshMe)
           </div>
           <form class="filter-grid" @submit.prevent="submitAccountFilters">
             <label>搜索<input v-model="accountFilters.search" placeholder="名称、备注或标识" /></label>
-            <label>平台<input v-model="accountFilters.platform" placeholder="openai / claude / gemini" /></label>
-            <label>状态<input v-model="accountFilters.status" placeholder="active" /></label>
-            <label>类型<input v-model="accountFilters.type" placeholder="oauth / setup-token / apikey" /></label>
-            <label>分组<input v-model="accountFilters.group" placeholder="group id / ungrouped" /></label>
-            <label>隐私模式<input v-model="accountFilters.privacyMode" placeholder="training_off" /></label>
+            <label>平台
+              <select v-model="accountFilters.platform">
+                <option value="">全部</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="gemini">Gemini</option>
+                <option value="antigravity">Antigravity</option>
+              </select>
+            </label>
+            <label>状态
+              <select v-model="accountFilters.status">
+                <option value="">全部</option>
+                <option value="active">active</option>
+                <option value="disabled">disabled</option>
+                <option value="error">error</option>
+                <option value="unused">unused</option>
+                <option value="used">used</option>
+                <option value="expired">expired</option>
+              </select>
+            </label>
+            <label>类型
+              <select v-model="accountFilters.type">
+                <option value="">全部</option>
+                <option value="oauth">OAuth</option>
+                <option value="setup-token">Setup Token</option>
+                <option value="apikey">API Key</option>
+                <option value="upstream">Upstream</option>
+                <option value="bedrock">Bedrock</option>
+                <option value="service-account">Service Account</option>
+              </select>
+            </label>
+            <label>隐私模式
+              <select v-model="accountFilters.privacyMode">
+                <option value="">全部</option>
+                <option value="training_off">OpenAI: training_off</option>
+                <option value="training_set_failed">OpenAI: training_set_failed</option>
+                <option value="training_set_cf_blocked">OpenAI: training_set_cf_blocked</option>
+                <option value="privacy_set">Antigravity: privacy_set</option>
+                <option value="privacy_set_failed">Antigravity: privacy_set_failed</option>
+                <option value="__unset__">未设置</option>
+              </select>
+            </label>
             <label>排序字段
               <select v-model="accountFilters.sortBy">
                 <option value="name">名称</option>
@@ -438,9 +588,37 @@ onMounted(refreshMe)
                 <option :value="50">50</option>
               </select>
             </label>
+            <label>调度状态
+              <select v-model="scheduleQuickFilter">
+                <option value="all">全部</option>
+                <option value="ready">可调度</option>
+                <option value="rate">限流中</option>
+                <option value="overload">过载冷却</option>
+                <option value="temp">临时不可调度</option>
+                <option value="blocked">不可调度</option>
+              </select>
+            </label>
             <button type="submit" :disabled="accountsLoading">{{ accountsLoading ? '查询中...' : '查询' }}</button>
             <button type="button" class="secondary" :disabled="accountsLoading" @click="clearAccountFilters">清空筛选</button>
           </form>
+          <section class="group-filter">
+            <div class="group-filter-head">
+              <strong>分组三态筛选</strong>
+              <span class="muted">选中=必须包含，不选中=必须不包含，随意=忽略</span>
+            </div>
+            <p v-if="groupsLoading" class="muted">正在加载分组选项...</p>
+            <div class="group-options">
+              <div v-for="group in groupOptions" :key="group.id" class="group-option">
+                <span>{{ group.name }}</span>
+                <div class="segmented">
+                  <button type="button" :class="{ active: groupState(group.id) === 'include' }" @click="setGroupState(group.id, 'include')">选中</button>
+                  <button type="button" :class="{ active: groupState(group.id) === 'exclude' }" @click="setGroupState(group.id, 'exclude')">不选中</button>
+                  <button type="button" :class="{ active: groupState(group.id) === 'any' }" @click="setGroupState(group.id, 'any')">随意</button>
+                </div>
+              </div>
+              <p v-if="!groupOptions.length && !groupsLoading" class="muted">暂无分组选项；查询账号后也会从当前列表补充分组。</p>
+            </div>
+          </section>
           <p v-if="accountError" class="error">{{ accountError }}</p>
           <p v-if="activeAccountFilters" class="muted">当前筛选：{{ activeAccountFilters }}</p>
           <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>
@@ -457,7 +635,7 @@ onMounted(refreshMe)
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="account in accounts" :key="String(account.id || accountName(account))">
+                <tr v-for="account in visibleAccounts" :key="String(account.id || accountName(account))">
                   <td>{{ accountName(account) }}</td>
                   <td>{{ [account.platform, account.status].filter(Boolean).join(' / ') || '未知' }}</td>
                   <td>{{ accountGroups(account) }}</td>
@@ -465,12 +643,13 @@ onMounted(refreshMe)
                   <td>{{ accountUsage(account) }}<br><span class="muted">{{ formatDateTime(account.last_used_at) }}</span></td>
                   <td><button class="secondary" @click="openAccountDetail(account)">详情</button></td>
                 </tr>
-                <tr v-if="!accounts.length">
+                <tr v-if="!visibleAccounts.length">
                   <td colspan="6" class="muted">{{ accountPager.loaded ? '没有匹配的账号。' : '请选择站点并查询账号。' }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
+          <p v-if="accountPager.loaded && visibleAccounts.length !== accounts.length" class="muted">当前页命中 {{ visibleAccounts.length }} / {{ accounts.length }} 条。</p>
           <div class="pager">
             <button class="secondary" :disabled="accountPager.page <= 1 || accountsLoading" @click="goPrevAccounts">上一页</button>
             <span class="muted">第 {{ accountPager.page }} 页<span v-if="accountTotalPages"> / 共 {{ accountTotalPages }} 页</span></span>
@@ -551,6 +730,13 @@ h1, h2 { margin: 0; }
 .error { color: #fecaca; }
 .form-block, .filter-grid, .modal-card { display: grid; gap: 14px; }
 .filter-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
+.group-filter { margin: 14px 0; padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(15, 23, 42, 0.46); }
+.group-filter-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; justify-content: space-between; }
+.group-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-top: 12px; }
+.group-option { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 10px; border: 1px solid rgba(148, 163, 184, 0.13); border-radius: 12px; background: rgba(2, 6, 23, 0.22); }
+.segmented { display: inline-flex; gap: 2px; padding: 3px; border-radius: 12px; background: rgba(2, 6, 23, 0.38); }
+.segmented button { padding: 7px 9px; border-radius: 9px; background: transparent; color: #94a3b8; font-size: 12px; }
+.segmented button.active { color: #fff; background: linear-gradient(135deg, #7c3aed, #2563eb); }
 label { display: grid; gap: 7px; color: #cbd5e1; font-size: 14px; }
 input, select {
   width: 100%; box-sizing: border-box; padding: 12px 13px; border: 1px solid rgba(148, 163, 184, 0.28);

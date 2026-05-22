@@ -43,6 +43,7 @@ Status:
 - Account list proxy now redacts sensitive upstream fields before sending data to the browser.
 - Account table now shows groups, proxy/scheduling state, usage percentages, and last-used time.
 - Advanced read-only filters added for type, group, privacy mode, and sorting.
+- Filter controls now use fixed options where available, and group filtering supports per-group tri-state include/exclude/ignore matching on the current result set.
 
 ## Phase 3: Import Workflow
 - Accept uploads of sub2api-supported upstream account formats.

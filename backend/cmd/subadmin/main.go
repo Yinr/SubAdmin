@@ -175,6 +175,21 @@ func main() {
 			_, _ = w.Write(data)
 			return
 		}
+		if action == "groups" {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			data, statusCode, err := siteService.AdminGET(r.Context(), id, "/api/v1/admin/groups/all", r.URL.Query())
+			if err != nil {
+				writeSiteError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(statusCode)
+			_, _ = w.Write(sanitizeJSONForBrowser(data))
+			return
+		}
 		if action != "" {
 			writeError(w, http.StatusNotFound, "site action not found")
 			return
