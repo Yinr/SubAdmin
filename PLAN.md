@@ -1,72 +1,141 @@
 # subAdmin Development Plan
 
+## Product Direction
+
+SubAdmin is a lightweight management panel for sub2api. It acts as a server-side BFF: the browser talks only to SubAdmin, and SubAdmin talks to sub2api admin APIs with credentials stored server-side.
+
+The near-term priority is a safe read-only management experience. Import, batch updates, and destructive operations come later and must include preview, confirmation, job tracking, and audit logs.
+
+## Security Baseline
+
+- Never expose sub2api admin keys to browser code, localStorage, logs, or API responses.
+- Store sub2api admin keys encrypted in SQLite.
+- Use HttpOnly session cookies for SubAdmin login sessions.
+- Store only session token hashes in SQLite.
+- Redact sensitive upstream account fields before returning account data to the browser.
+- Keep account write operations disabled until preview, confirmation, jobs, and audit logs exist.
+
 ## Phase 0: Foundations
-- Create repository structure for backend, frontend, docs, and persistent data.
-- Add Go module and initial server entrypoint.
-- Add Vue frontend scaffold and build pipeline.
-- Add SQLite database bootstrap and migrations.
-- Add session-cookie authentication.
-- Add encrypted site credential storage.
-- Add protected docs serving.
+
+Status: complete.
+
+- Repository structure for backend, frontend, docs, and persistent data.
+- Go backend entrypoint and config loading.
+- SQLite bootstrap and initial schema.
+- Session-cookie authentication.
+- Vue 3 + Vite frontend build pipeline.
+- Static frontend serving from Go backend, with fallback page when no build exists.
+- sub2api source included as a submodule.
 
 ## Phase 1: Site Management
-- CRUD for sub2api site records.
-- Store base URL, encrypted admin key, note, and enabled/default flags.
-- Add connection test for each site.
-- Add site switching in the UI.
 
-Status:
+Status: complete for current scope.
 
-- Backend site CRUD APIs added.
-- Site admin keys are encrypted before storage.
-- Site connectivity test API added.
-- UI site management panel added in the shell.
-- Vue-based site management UI added with modal form.
-- Site modal no longer closes from backdrop clicks to avoid losing edits.
-- Loading states added for login, sites, account queries, and site saves.
+- Site CRUD APIs and UI.
+- Encrypted site admin-key storage.
+- Admin-key hint only in API responses; plaintext keys are never returned.
+- Site connection test through server-side sub2api admin API calls.
+- Multi-site switching.
+- Modal save UX hardened so backdrop clicks do not discard edits.
+- Loading states for login, site loading, account loading, and site saves.
 
-## Phase 2: Account Listing
-- List upstream accounts for the selected site.
-- Add filtering by group, status, schedule, proxy, priority, rate, last used, and expiry.
-- Add text search for name and note.
-- Add pagination and account detail view.
+## Phase 2: Account Listing And Read-Only Operations
 
-Status:
+Status: in progress, mostly usable.
 
-- Backend account-list proxy added for each site.
-- Minimal account query UI added with search, platform, and status fields.
-- Account results now use a table layout with basic pagination controls.
-- Account page size selector added.
-- Default account page size changed to 10 with short client-side query cache.
-- Pagination UI now shows total pages, disables unavailable next page, and page-size changes auto-query from page 1.
-- Added a read-only account detail modal based on current list data, with client-side redaction for sensitive field names.
-- Account list proxy now redacts sensitive upstream fields before sending data to the browser.
-- Account table now shows groups, proxy/scheduling state, usage percentages, and last-used time.
-- Advanced read-only filters added for type, group, privacy mode, and sorting.
-- Filter controls now use fixed options where available, and group filtering supports per-group tri-state include/exclude/ignore matching on the current result set.
+Completed:
 
-## Phase 3: Import Workflow
-- Accept uploads of sub2api-supported upstream account formats.
-- Parse and preview imported data before commit.
-- Support import templates for model, proxy, note, group, priority, concurrency, and name rule.
-- Add import job tracking and results.
+- Read-only account-list proxy per site.
+- Server-side sensitive field redaction for account-list responses.
+- Account table with name, platform/status, groups, proxy/scheduling state, usage, and last-used time.
+- Pagination with page-size selector, total pages, unavailable-next-page handling, and page-size reset to page 1.
+- Short client-side cache for account queries.
+- Race protection so slow responses do not overwrite newer results.
+- Account detail modal based on the current list result, with redacted JSON.
+- Fixed option filters for platform, status, type, privacy mode, sorting, page size, and scheduling state.
+- Read-only groups proxy per site.
+- Multi-group local tri-state filtering on the current result set:
+  - include: account must contain the group.
+  - exclude: account must not contain the group.
+  - ignored: group is not part of the filter list.
+- Lightweight dashboard overview cards based on loaded site/account data.
 
-## Phase 4: Account Management
+Next:
+
+- Better account detail sections for scheduling, usage, errors, groups, and proxy info.
+- Clearer UI messaging for local result-set filters versus upstream query filters.
+- Optional copy helpers for account ID, name, and active filter summary.
+
+## Phase 3: Protected Docs Integration
+
+Status: planned.
+
+- Add a logged-in docs page in the SubAdmin UI.
+- Serve existing OpenAPI and Swagger UI assets from `docs/` behind SubAdmin auth.
+- Add a protected view for `docs/AI_REFERENCE.md`.
+- Remove the need for a separate docs deployment.
+
+## Phase 4: Import Preview Workflow
+
+Status: planned. Preview first, no upstream writes initially.
+
+- Accept uploaded files and pasted text in sub2api-supported upstream account formats.
+- Parse input server-side and return a preview only.
+- Show recognized accounts, platform/type, missing fields, duplicate risks, and validation warnings.
+- Apply draft import settings such as default group, proxy, priority, concurrency, and naming rules.
+- Do not call upstream write APIs until explicit confirmation and job/audit infrastructure exist.
+
+## Phase 5: Import Templates
+
+Status: planned.
+
+- Store reusable import templates in SQLite.
+- Template fields may include default platform, account type, group, proxy, priority, concurrency, notes, and naming rules.
+- Use templates during import preview before any write operation is allowed.
+
+## Phase 6: Jobs And Audit Logs
+
+Status: planned and required before risky write operations.
+
+- Jobs page for import previews, import execution, and batch operations.
+- Audit logs for site changes, import actions, and account write operations.
+- Record action, site, target identifiers, timestamp, session/IP metadata, and result.
+- Keep audit records for failed and cancelled operations too.
+
+## Phase 7: Account Management And Batch Operations
+
+Status: planned after Phase 6.
+
+Low-risk candidates:
+
+- Refresh account status or usage.
+- Clear account error state.
+- Clear rate limits.
+
+High-risk candidates:
+
+- Change groups, status, schedule, proxy, priority, rate, name, or note.
+- Delete accounts.
 - Batch update selected or filtered accounts.
-- Support change of group, status, schedule, proxy, priority, rate, name, note.
-- Support refresh usage window, connection test, and delete.
-- Add audit logs for destructive and bulk actions.
 
-## Phase 5: Docs Integration
-- Serve protected OpenAPI and AI reference docs inside the app.
-- Remove dependency on separate docs deployment.
+Requirements for high-risk operations:
 
-## Phase 6: Hardening
-- Add operational logs and better error handling.
-- Tune upload and batch limits.
-- Add usability polish for the UI.
+- Preview affected accounts.
+- Explicit confirmation.
+- Job tracking.
+- Audit log entry.
+- Conservative limits and clear error reporting.
 
-## Notes
-- Keep the first version simple and low-overhead.
-- Prefer server-side aggregation and filtering where possible.
-- Revisit schema only when a real need appears.
+## Phase 8: Hardening And Polish
+
+Status: ongoing.
+
+- Better operational logs and error messages.
+- Upload and batch-size limits.
+- UI polish for mobile and dense data tables.
+- Server-side aggregation where it reduces data transfer or makes filtering more correct.
+- Test coverage for auth, credential encryption, redaction, and proxy behavior.
+
+## Immediate Next Step
+
+Enhance the account detail modal with clearer read-only sections for scheduling, usage, errors, groups, and proxy info. Keep all sensitive upstream fields redacted.

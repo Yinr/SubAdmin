@@ -100,6 +100,43 @@ const groupFilterItems = computed(() => groupOptions.value.filter((group) => gro
 
 const addableGroupOptions = computed(() => groupOptions.value.filter((group) => groupState(group.id) === 'any'))
 
+const activeSite = computed(() => sites.value.find((site) => site.id === activeSiteId.value) || null)
+
+const dashboardStats = computed(() => {
+  const scheduleCounts = accounts.value.reduce<Record<string, number>>((acc, account) => {
+    const key = accountScheduleKey(account)
+    acc[key] = (acc[key] || 0) + 1
+    return acc
+  }, {})
+  const statusCounts = accounts.value.reduce<Record<string, number>>((acc, account) => {
+    const key = String(account.status || 'unknown')
+    acc[key] = (acc[key] || 0) + 1
+    return acc
+  }, {})
+  const platformCounts = accounts.value.reduce<Record<string, number>>((acc, account) => {
+    const key = String(account.platform || 'unknown')
+    acc[key] = (acc[key] || 0) + 1
+    return acc
+  }, {})
+  return {
+    sites: sites.value.length,
+    enabledSites: sites.value.filter((site) => site.enabled).length,
+    loadedAccounts: accounts.value.length,
+    visibleAccounts: visibleAccounts.value.length,
+    upstreamTotal: accountPager.total,
+    activeAccounts: statusCounts.active || 0,
+    errorAccounts: statusCounts.error || 0,
+    disabledAccounts: statusCounts.disabled || 0,
+    rateLimited: scheduleCounts.rate || 0,
+    overload: scheduleCounts.overload || 0,
+    blocked: (scheduleCounts.temp || 0) + (scheduleCounts.blocked || 0),
+    platforms: Object.entries(platformCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => `${name}: ${count}`)
+      .join(' / ') || '暂无账号数据',
+  }
+})
+
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     credentials: 'same-origin',
@@ -500,6 +537,39 @@ onMounted(refreshMe)
         <button class="secondary" @click="logout">退出登录</button>
       </header>
 
+      <section class="overview-grid">
+        <article class="overview-card">
+          <span>站点</span>
+          <strong>{{ dashboardStats.enabledSites }} / {{ dashboardStats.sites }}</strong>
+          <p class="muted">启用 / 全部</p>
+        </article>
+        <article class="overview-card">
+          <span>当前站点</span>
+          <strong>{{ activeSite?.name || '未选择' }}</strong>
+          <p class="muted">{{ activeSite?.enabled ? '启用' : '未启用或未知' }}</p>
+        </article>
+        <article class="overview-card">
+          <span>账号</span>
+          <strong>{{ dashboardStats.visibleAccounts }} / {{ dashboardStats.loadedAccounts }}</strong>
+          <p class="muted">当前页命中 / 已加载<span v-if="dashboardStats.upstreamTotal"> · 上游 {{ dashboardStats.upstreamTotal }}</span></p>
+        </article>
+        <article class="overview-card">
+          <span>状态</span>
+          <strong>{{ dashboardStats.activeAccounts }} active</strong>
+          <p class="muted">error {{ dashboardStats.errorAccounts }} · disabled {{ dashboardStats.disabledAccounts }}</p>
+        </article>
+        <article class="overview-card">
+          <span>调度风险</span>
+          <strong>{{ dashboardStats.rateLimited + dashboardStats.overload + dashboardStats.blocked }}</strong>
+          <p class="muted">限流 {{ dashboardStats.rateLimited }} · 过载 {{ dashboardStats.overload }} · 不可调度 {{ dashboardStats.blocked }}</p>
+        </article>
+        <article class="overview-card wide">
+          <span>平台分布</span>
+          <strong>{{ dashboardStats.platforms }}</strong>
+          <p class="muted">基于当前已加载账号结果统计</p>
+        </article>
+      </section>
+
       <div class="layout-grid">
         <aside class="panel">
           <div class="panel-head">
@@ -741,6 +811,12 @@ onMounted(refreshMe)
 .login-card { width: min(520px, 100%); margin: 12vh auto; padding: 28px; }
 .dashboard { display: grid; gap: 18px; }
 .topbar { display: flex; justify-content: space-between; gap: 18px; align-items: center; padding: 22px; }
+.overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.overview-card { padding: 16px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 18px; background: rgba(15, 23, 42, 0.7); }
+.overview-card.wide { grid-column: span 2; }
+.overview-card span { color: #94a3b8; font-size: 13px; }
+.overview-card strong { display: block; margin-top: 8px; color: #fff; font-size: 22px; line-height: 1.2; }
+.overview-card p { margin: 8px 0 0; font-size: 13px; }
 .layout-grid { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 18px; align-items: start; }
 .panel { padding: 18px; }
 .content-panel { min-height: 520px; }
@@ -794,5 +870,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 @media (max-width: 900px) {
   .layout-grid { grid-template-columns: 1fr; }
   .topbar { align-items: flex-start; flex-direction: column; }
+  .overview-card.wide { grid-column: auto; }
 }
 </style>
