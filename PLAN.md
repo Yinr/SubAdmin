@@ -95,6 +95,7 @@ Completed:
 - Batch test result parser recognizes known rate-limit signals such as 429, usage_limit_reached, resets_at, retry_after, and rate_limit_reset_at.
 - Batch test parser now handles OpenAI-style 429 usage limit payloads with `plan_type`, Unix `resets_at`, and `resets_in_seconds`.
 - Batch testing supports configurable per-account delay with random jitter for smoother upstream load.
+- Batch testing auto-raises the minimum inter-request delay for large selections.
 - Temporary sanitized batch test response logs can be written to `/tmp/subadmin-batch-tests/` for parser analysis.
 
 Next:

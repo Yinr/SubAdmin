@@ -371,10 +371,6 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 		writeError(w, http.StatusBadRequest, "ids is required")
 		return
 	}
-	if len(input.IDs) > 20 {
-		writeError(w, http.StatusBadRequest, "at most 20 accounts can be tested at once")
-		return
-	}
 	results := make([]map[string]any, 0, len(input.IDs))
 	for _, accountID := range input.IDs {
 		if accountID <= 0 {

@@ -649,14 +649,10 @@ async function testSelectedAccounts() {
     batchTestError.value = '请先选择账号'
     return
   }
-  if (ids.length > 20) {
-    batchTestError.value = '一次最多检测 20 个账号'
-    return
-  }
   batchTesting.value = true
   try {
     for (const [index, id] of ids.entries()) {
-      if (index > 0) await waitForBatchDelay()
+      if (index > 0) await waitForBatchDelay(ids.length)
       batchTestResults.value = [...batchTestResults.value, { id, pending: true, message: '检测中...' }]
       const payload = await api<{ items: Record<string, unknown>[] }>(`api/sites/${activeSiteId.value}/accounts`, {
         method: 'POST',
@@ -672,12 +668,20 @@ async function testSelectedAccounts() {
   }
 }
 
-function waitForBatchDelay() {
+function waitForBatchDelay(totalCount: number) {
   const base = Math.max(0, Number(batchTestForm.delayMs) || 0)
   const jitter = Math.max(0, Number(batchTestForm.jitterMs) || 0)
+  const floor = getBatchDelayFloor(totalCount)
   const offset = jitter ? Math.round((Math.random() * 2 - 1) * jitter) : 0
-  const delay = Math.max(0, base + offset)
+  const delay = Math.max(floor, base + offset)
   return new Promise((resolve) => window.setTimeout(resolve, delay))
+}
+
+function getBatchDelayFloor(totalCount: number) {
+  if (totalCount > 100) return 1500
+  if (totalCount > 50) return 1000
+  if (totalCount > 20) return 600
+  return 0
 }
 
 function isBatchResultPending(result: Record<string, unknown>) {
@@ -992,9 +996,9 @@ onMounted(refreshMe)
             <label>随机抖动(ms)<input v-model.number="batchTestForm.jitterMs" type="number" min="0" step="100" /></label>
             <label class="inline-check"><input v-model="batchTestForm.logResponses" type="checkbox" /> 临时记录响应日志</label>
             <button class="secondary" :disabled="batchTesting || selectedAccountCount === 0" @click="testSelectedAccounts">{{ batchTesting ? '检测中...' : '检测选中账号' }}</button>
-            <button class="secondary" :disabled="selectedAccountCount === 0" @click="clearAccountSelection">清空选择</button>
+            <button class="secondary" :disabled="selectedAccountCount === 0" @click="clearAccountSelection">一键取消选择</button>
           </div>
-          <p v-if="batchTesting" class="muted">正在检测 {{ selectedAccountCount }} 个账号；每个账号完成后会更新一行结果。</p>
+          <p v-if="batchTesting" class="muted">正在检测 {{ selectedAccountCount }} 个账号；每个账号完成后会更新一行结果。大批量会自动提高最小间隔。</p>
           <p v-if="batchTestError" class="error">{{ batchTestError }}</p>
           <p v-if="copyNotice" class="muted">{{ copyNotice }}</p>
           <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>
