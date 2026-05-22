@@ -60,6 +60,7 @@ const batchRefreshDone = ref(0)
 const accountPageJump = ref('')
 const accountQueryElapsedSeconds = ref(0)
 const accountQuerySlow = ref(false)
+const accountQueryNotice = ref('')
 const groupPopoverAccount = ref<Account | null>(null)
 const groupPopoverPosition = reactive({ top: 0, left: 0 })
 const filteredAccountIDsCache = new Map<string, number[]>()
@@ -520,6 +521,7 @@ const activeAccountFilters = computed(() => {
 
 async function loadAccounts(options: { force?: boolean } = {}) {
   accountError.value = ''
+  accountQueryNotice.value = ''
   if (!activeSiteId.value) {
     accountError.value = '请先选择站点'
     return
@@ -532,8 +534,10 @@ async function loadAccounts(options: { force?: boolean } = {}) {
     accounts.value = normalizeAccounts(cached.payload)
     accountPager.total = payloadTotal(cached.payload)
     accountPager.loaded = true
+    accountQueryNotice.value = '已使用 8 秒内缓存结果'
     return
   }
+  const startedAt = Date.now()
   stopAccountQueryTimer()
   accountAbortController.value?.abort()
   accountQueryCancelled = false
@@ -553,6 +557,7 @@ async function loadAccounts(options: { force?: boolean } = {}) {
     accounts.value = normalizeAccounts(payload)
     accountPager.total = payloadTotal(payload)
     accountPager.loaded = true
+    accountQueryNotice.value = `查询完成，用时 ${formatDuration(Date.now() - startedAt)}`
   } catch (error) {
     if (requestSeq !== accountRequestSeq) return
     if (accountQueryCancelled) {
@@ -581,6 +586,11 @@ function cancelAccountQuery() {
   if (!accountsLoading.value) return
   accountQueryCancelled = true
   accountAbortController.value?.abort()
+}
+
+function formatDuration(ms: number) {
+  if (ms < 1000) return `${ms} ms`
+  return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} 秒`
 }
 
 function reloadAccountsFromUpstream() {
@@ -806,6 +816,12 @@ function setGroupState(id: string, state: GroupState) {
     return
   }
   groupFilterStates[id] = state
+}
+
+function groupStateLabel(state: GroupState) {
+  if (state === 'include') return '包含'
+  if (state === 'exclude') return '排除'
+  return '随意'
 }
 
 function addGroupFilter() {
@@ -1416,6 +1432,13 @@ onUnmounted(() => {
             <button type="button" class="mini" @click="copyText(activeAccountFilters, '筛选条件')">复制</button>
             <span v-if="filteredIDCacheHit" class="pill">已缓存筛选 ID</span>
           </p>
+          <div v-if="groupFilterItems.length" class="active-filter-chips">
+            <span class="muted">分组筛选</span>
+            <button v-for="group in groupFilterItems" :key="group.id" type="button" class="filter-chip" @click="setGroupState(group.id, 'any')">
+              {{ groupStateLabel(groupState(group.id)) }}：{{ group.name }} <span>×</span>
+            </button>
+          </div>
+          <p v-if="accountQueryNotice" class="muted query-notice">{{ accountQueryNotice }}</p>
           <section class="section-card batch-section">
             <div class="section-title">
               <div>
@@ -1825,6 +1848,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .danger { background: rgba(239, 68, 68, 0.16); color: #fecaca; }
 .site-list, .account-list { display: grid; gap: 12px; }
 .filter-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.active-filter-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 12px; }
+.filter-chip { padding: 6px 10px; border-radius: 999px; background: rgba(59, 130, 246, 0.14); color: #dbeafe; font-size: 12px; }
+.filter-chip span { margin-left: 6px; color: #93c5fd; }
+.query-notice { margin: 6px 0 12px; }
 .batch-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 14px; background: rgba(2, 6, 23, 0.22); }
 .batch-results { display: grid; gap: 10px; margin-top: 14px; }
 .result-panel { padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(2, 6, 23, 0.24); }

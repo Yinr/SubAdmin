@@ -410,6 +410,12 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 		if err != nil {
 			result["ok"] = false
 			result["error"] = err.Error()
+			if hint, resetAt := parseKnownTestHint(err.Error()); hint != "" {
+				result["hint"] = hint
+				if resetAt != "" {
+					result["resetAt"] = resetAt
+				}
+			}
 		} else {
 			sanitizedBody := string(sanitizeJSONForBrowser(data))
 			ok, message, model, hint, resetAt := summarizeAccountTestSSE(sanitizedBody)
@@ -542,10 +548,22 @@ func parseKnownTestHint(text string) (string, string) {
 	if strings.Contains(lower, "token_invalidated") || strings.Contains(lower, "invalidated oauth token") {
 		return "令牌失效", ""
 	}
+	if strings.Contains(lower, "context deadline exceeded") || strings.Contains(lower, "timeout") || strings.Contains(lower, "timed out") || strings.Contains(lower, "connection reset") || strings.Contains(lower, "connection refused") {
+		return "网络或超时异常", ""
+	}
 	if !strings.Contains(lower, "429") && !strings.Contains(lower, "rate_limit") && !strings.Contains(lower, "rate limit") && !strings.Contains(lower, "usage_limit_reached") {
+		if strings.Contains(lower, "401") || strings.Contains(lower, "unauthorized") || strings.Contains(lower, "authentication") || strings.Contains(lower, "invalid api key") {
+			return "上游认证失败", ""
+		}
+		if strings.Contains(lower, "cloudflare") || strings.Contains(lower, "cf blocked") || strings.Contains(lower, "cf_blocked") {
+			return "上游服务异常: Cloudflare 阻断", ""
+		}
+		if strings.Contains(lower, "529") || strings.Contains(lower, "502") || strings.Contains(lower, "503") || strings.Contains(lower, "504") || strings.Contains(lower, "5xx") || strings.Contains(lower, "server error") || strings.Contains(lower, "bad gateway") || strings.Contains(lower, "service unavailable") {
+			return "上游服务异常", ""
+		}
 		return "", ""
 	}
-	parts := []string{"限流或额度耗尽"}
+	parts := []string{"账号限流或额度耗尽"}
 	if planType := firstKnownTimeValue(text, "plan_type"); planType != "" {
 		parts = append(parts, "套餐: "+planType)
 	}

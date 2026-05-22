@@ -107,6 +107,7 @@ Completed:
 Next:
 
 - Promote batch tests into persisted Jobs with retry and history.
+- Optional later polish after core workflows are stable: export batch test results, retry a single failure category, and expand known-error classification for clearer summaries.
 
 ## Phase 5: Import Preview Workflow
 
