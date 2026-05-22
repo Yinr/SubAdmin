@@ -625,6 +625,16 @@ onMounted(refreshMe)
           <strong>{{ dashboardStats.platforms }}</strong>
           <p class="muted">基于当前已加载账号结果统计</p>
         </article>
+        <article class="overview-card wide">
+          <span>文档</span>
+          <strong>受保护 API 文档</strong>
+          <p class="muted">登录后可访问 Swagger UI、OpenAPI YAML 和 AI Reference。文档不会自动注入 sub2api 管理员 Key。</p>
+          <div class="actions compact-actions">
+            <a class="button-link secondary" href="docs/" target="_blank" rel="noreferrer">Swagger UI</a>
+            <a class="button-link secondary" href="docs/openapi.yaml" target="_blank" rel="noreferrer">OpenAPI</a>
+            <a class="button-link secondary" href="docs/AI_REFERENCE.md" target="_blank" rel="noreferrer">AI Reference</a>
+          </div>
+        </article>
       </section>
 
       <div class="layout-grid">
@@ -955,6 +965,7 @@ button {
   cursor: pointer; font-weight: 700;
 }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+.button-link { display: inline-block; border-radius: 12px; padding: 10px 12px; color: #fff; font-weight: 700; text-decoration: none; }
 .secondary { background: rgba(148, 163, 184, 0.14); color: #e2e8f0; }
 .mini { margin-left: 8px; padding: 5px 8px; border-radius: 9px; background: rgba(148, 163, 184, 0.14); color: #e2e8f0; font-size: 12px; }
 .danger { background: rgba(239, 68, 68, 0.16); color: #fecaca; }
@@ -973,6 +984,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .site-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
 .pill { padding: 4px 8px; border-radius: 999px; background: rgba(196, 181, 253, 0.12); color: #ddd6fe; font-size: 12px; }
 .actions, .modal-actions, .check-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+.compact-actions { margin-top: 10px; }
 .modal-mask { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(2, 6, 23, 0.72); }
 .modal-card { width: min(560px, 100%); padding: 22px; }
 .detail-card { width: min(820px, 100%); max-height: calc(100vh - 56px); overflow: auto; }

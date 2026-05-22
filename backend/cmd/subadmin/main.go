@@ -100,6 +100,8 @@ func main() {
 			"expiresAt":     session.ExpiresAt.Format(time.RFC3339),
 		})
 	})
+	mux.HandleFunc("/docs", protectedDocsHandler(authManager))
+	mux.HandleFunc("/docs/", protectedDocsHandler(authManager))
 	mux.HandleFunc("/api/sites", func(w http.ResponseWriter, r *http.Request) {
 		if !requireAuth(w, r, authManager) {
 			return
@@ -229,6 +231,24 @@ func main() {
 	log.Printf("subAdmin listening on %s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatalf("serve: %v", err)
+	}
+}
+
+func protectedDocsHandler(authManager *auth.Manager) http.HandlerFunc {
+	docsPath := os.Getenv("SUBADMIN_DOCS_DIR")
+	if docsPath == "" {
+		docsPath = "../docs"
+	}
+	fileServer := http.FileServer(http.Dir(docsPath))
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/docs" {
+			http.Redirect(w, r, "/docs/", http.StatusPermanentRedirect)
+			return
+		}
+		if !requireAuth(w, r, authManager) {
+			return
+		}
+		http.StripPrefix("/docs/", fileServer).ServeHTTP(w, r)
 	}
 }
 

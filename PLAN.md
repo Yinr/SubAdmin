@@ -64,14 +64,15 @@ Completed:
 - Copy helpers added for account ID, account name, and active filter summary.
 
 Next:
-- Protected docs integration.
+- Continue protected docs polish.
 
 ## Phase 3: Protected Docs Integration
 
-Status: planned.
+Status: in progress.
 
-- Add a logged-in docs page in the SubAdmin UI.
-- Serve existing OpenAPI and Swagger UI assets from `docs/` behind SubAdmin auth.
+- Protected `/docs/` route added for existing Swagger UI assets.
+- Frontend overview card links to Swagger UI, OpenAPI YAML, and AI Reference.
+- Add a richer logged-in docs page in the SubAdmin UI.
 - Add a protected view for `docs/AI_REFERENCE.md`.
 - Remove the need for a separate docs deployment.
 
@@ -138,4 +139,4 @@ Status: ongoing.
 
 ## Immediate Next Step
 
-Start Phase 3 protected docs integration by exposing logged-in access to existing docs assets through SubAdmin.
+Polish protected docs integration with an in-app docs page and clearer AI Reference rendering.
