@@ -66,6 +66,8 @@ Completed:
 
 Next:
 - Account maintenance: batch testing for selected accounts.
+- Account table polish: replace dense text cells with structured badges, chips, compact metadata rows, and clearer status/usage/scheduling components.
+- Add account table ergonomics such as column visibility, sticky key columns, better mobile layout, and clearer empty/loading/error states.
 
 ## Phase 3: Protected Docs Integration
 
@@ -164,6 +166,13 @@ Status: ongoing.
 - Better operational logs and error messages.
 - Upload and batch-size limits.
 - UI polish for mobile and dense data tables.
+- Account table redesign from text-heavy cells into structured visual components:
+  - platform/type/status badges;
+  - group chips with overflow handling;
+  - proxy and scheduling badges;
+  - usage meters or compact usage rows;
+  - last-used and error summaries with consistent formatting;
+  - optional column visibility and sticky identity/action columns.
 - Server-side aggregation where it reduces data transfer or makes filtering more correct.
 - Test coverage for auth, credential encryption, redaction, and proxy behavior.
 

@@ -17,6 +17,7 @@ type Account = Record<string, unknown>
 type Group = Record<string, unknown>
 type GroupState = 'any' | 'include' | 'exclude'
 type ViewMode = 'accounts' | 'docs'
+type ApiOptions = RequestInit & { timeoutMs?: number }
 
 const authed = ref(false)
 const expiresAt = ref('')
@@ -56,6 +57,7 @@ const batchTestTotal = ref(0)
 const batchTestDone = ref(0)
 const batchRefreshTotal = ref(0)
 const batchRefreshDone = ref(0)
+const accountPageJump = ref('')
 const filteredAccountIDsCache = new Map<string, number[]>()
 
 const siteForm = reactive({
@@ -101,7 +103,49 @@ const accountPager = reactive({
 const accountCache = new Map<string, { expiresAt: number; payload: any }>()
 let accountRequestSeq = 0
 
+const platformOptions = [
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'gemini', label: 'Gemini' },
+  { value: 'antigravity', label: 'Antigravity' },
+]
+
+const accountTypeOptions = [
+  { value: 'oauth', label: 'OAuth' },
+  { value: 'setup-token', label: 'Setup Token' },
+  { value: 'apikey', label: 'API Key' },
+  { value: 'bedrock', label: 'AWS Bedrock' },
+  { value: 'upstream', label: '对接上游' },
+  { value: 'service-account', label: 'Service Account' },
+]
+
+const accountStatusOptions = [
+  { value: 'active', label: '正常' },
+  { value: 'inactive', label: '停用' },
+  { value: 'error', label: '错误' },
+  { value: 'rate_limited', label: '限流中' },
+  { value: 'temp_unschedulable', label: '临时不可调度' },
+  { value: 'unschedulable', label: '不可调度' },
+]
+
+const privacyModeOptions = [
+  { value: '__unset__', label: '未设置' },
+  { value: 'training_off', label: '已关闭训练数据共享' },
+  { value: 'training_set_cf_blocked', label: '被 Cloudflare 拦截，训练可能仍开启' },
+  { value: 'training_set_failed', label: '关闭训练数据共享失败' },
+  { value: 'privacy_set', label: '已关闭遥测和营销邮件' },
+  { value: 'privacy_set_failed', label: '隐私设置失败' },
+]
+
 const accountTotalPages = computed(() => (accountPager.total ? Math.ceil(accountPager.total / accountPager.pageSize) : 0))
+const accountPageButtons = computed(() => {
+  if (!accountTotalPages.value) return []
+  const start = Math.max(1, accountPager.page - 2)
+  const end = Math.min(accountTotalPages.value, accountPager.page + 2)
+  const pages: number[] = []
+  for (let page = start; page <= end; page += 1) pages.push(page)
+  return pages
+})
 const hasNextAccountPage = computed(() => {
   if (accountPager.total) return accountPager.page < accountTotalPages.value
   return accounts.value.length >= accountPager.pageSize
@@ -196,15 +240,35 @@ const dashboardStats = computed(() => {
   }
 })
 
-async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(path, {
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || '请求失败')
-  return data as T
+async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  const { timeoutMs, signal, ...fetchOptions } = options
+  const controller = new AbortController()
+  const timeout = typeof timeoutMs === 'number' && timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : null
+  if (signal) {
+    if (signal.aborted) controller.abort()
+    else signal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+  try {
+    const res = await fetch(path, {
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', ...(fetchOptions.headers || {}) },
+      ...fetchOptions,
+      signal: controller.signal,
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || '请求失败')
+    return data as T
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('请求超时，请稍后重试或缩小筛选范围')
+    }
+    if (error instanceof TypeError) {
+      throw new Error('网络连接中断，请刷新后重试')
+    }
+    throw error
+  } finally {
+    if (timeout !== null) window.clearTimeout(timeout)
+  }
 }
 
 async function textResource(path: string): Promise<string> {
@@ -409,13 +473,35 @@ function payloadTotal(payload: any) {
   return Number(payload.total || payload.data?.total || 0)
 }
 
+function optionLabel(options: { value: string; label: string }[], value: unknown) {
+  const text = String(value || '')
+  if (!text) return '未知'
+  return options.find((option) => option.value === text)?.label || text
+}
+
+function platformLabel(value: unknown) {
+  return optionLabel(platformOptions, value)
+}
+
+function accountTypeLabel(value: unknown) {
+  return optionLabel(accountTypeOptions, value)
+}
+
+function statusLabel(value: unknown) {
+  return optionLabel(accountStatusOptions, value)
+}
+
+function privacyModeLabel(value: unknown) {
+  return optionLabel(privacyModeOptions, value)
+}
+
 const activeAccountFilters = computed(() => {
   const parts = [
     accountFilters.search && `搜索: ${accountFilters.search}`,
-    accountFilters.platform && `平台: ${accountFilters.platform}`,
-    accountFilters.status && `状态: ${accountFilters.status}`,
-    accountFilters.type && `类型: ${accountFilters.type}`,
-    accountFilters.privacyMode && `隐私: ${accountFilters.privacyMode}`,
+    accountFilters.platform && `平台: ${platformLabel(accountFilters.platform)}`,
+    accountFilters.status && `状态: ${statusLabel(accountFilters.status)}`,
+    accountFilters.type && `类型: ${accountTypeLabel(accountFilters.type)}`,
+    accountFilters.privacyMode && `隐私: ${privacyModeLabel(accountFilters.privacyMode)}`,
     accountFilters.upstreamGroup && `上游分组: ${accountFilters.upstreamGroup}`,
     accountFilters.sortBy !== 'name' && `排序: ${accountFilters.sortBy}`,
     accountFilters.sortOrder !== 'asc' && `方向: ${accountFilters.sortOrder}`,
@@ -477,6 +563,35 @@ function goPrevAccounts() {
   if (accountPager.page <= 1) return
   accountPager.page -= 1
   loadAccounts()
+}
+
+function goFirstAccounts() {
+  if (accountPager.page <= 1) return
+  accountPager.page = 1
+  loadAccounts()
+}
+
+function goLastAccounts() {
+  if (!accountTotalPages.value || accountPager.page >= accountTotalPages.value) return
+  accountPager.page = accountTotalPages.value
+  loadAccounts()
+}
+
+function goAccountPage(page: number) {
+  if (!Number.isFinite(page)) return
+  const target = Math.trunc(page)
+  if (target <= 0) return
+  if (accountTotalPages.value && target > accountTotalPages.value) return
+  if (target === accountPager.page) return
+  accountPager.page = target
+  loadAccounts()
+}
+
+function jumpToAccountPage() {
+  const target = Number(String(accountPageJump.value).trim())
+  if (!Number.isFinite(target)) return
+  accountPageJump.value = ''
+  goAccountPage(target)
 }
 
 function goNextAccounts() {
@@ -573,6 +688,21 @@ function accountGroups(account: Account) {
   return names.length ? names.join(' / ') : '未分组'
 }
 
+function accountNote(account: Account) {
+  const extra = (account.extra || {}) as Record<string, unknown>
+  const value = account.note ?? account.remark ?? account.description ?? extra.note ?? extra.remark ?? extra.description
+  const text = value === undefined || value === null ? '' : String(value).trim()
+  return text
+}
+
+function accountGroupPreview(account: Account) {
+  const groups = accountGroupEntries(account)
+  return {
+    items: groups.slice(0, 2),
+    extra: Math.max(0, groups.length - 2),
+  }
+}
+
 function accountGroupEntries(account: Account) {
   const groups = Array.isArray(account.groups) ? account.groups : []
   const accountGroups = Array.isArray(account.account_groups) ? account.account_groups : []
@@ -643,6 +773,69 @@ function accountProxy(account: Account) {
   return String(proxy.name || proxy.id || account.proxy_id || '未知代理')
 }
 
+function accountPlatformLabel(account: Account) {
+  const parts = [platformLabel(account.platform), accountTypeLabel(account.type)]
+  return parts.filter((part) => part !== '未知').join(' / ') || '未知'
+}
+
+function accountStatusLabel(account: Account) {
+  return statusLabel(account.status)
+}
+
+function accountStatusTone(account: Account) {
+  const status = String(account.status || '').toLowerCase()
+  if (!status) return 'neutral'
+  if (['active', 'enabled', 'ready', 'ok', 'success'].includes(status)) return 'success'
+  if (['error', 'failed', 'disabled', 'blocked', 'inactive'].includes(status)) return 'danger'
+  if (['pending', 'testing', 'processing'].includes(status)) return 'warning'
+  return 'neutral'
+}
+
+function accountScheduleTone(account: Account) {
+  switch (accountScheduleKey(account)) {
+    case 'ready': return 'success'
+    case 'rate': return 'warning'
+    case 'overload': return 'info'
+    case 'temp':
+    case 'blocked': return 'danger'
+    default: return 'neutral'
+  }
+}
+
+function accountUsageShort(account: Account) {
+  const parts = accountUsageMetrics(account).map((metric) => `${metric.label} ${metric.text}`).filter((item) => !item.endsWith('未知'))
+  return parts.length ? parts.join(' / ') : '未知'
+}
+
+function accountUsageMetrics(account: Account) {
+  const extra = (account.extra || {}) as Record<string, unknown>
+  const primary = usagePercentValue(extra.codex_primary_used_percent ?? extra.codex_5h_used_percent)
+  const secondary = usagePercentValue(extra.codex_secondary_used_percent ?? extra.codex_7d_used_percent)
+  return [
+    { label: '5h', value: primary, text: usagePercentText(primary) },
+    { label: '7d', value: secondary, text: usagePercentText(secondary) },
+  ]
+}
+
+function usagePercentValue(value: unknown) {
+  if (value === undefined || value === null || value === '') return null
+  const numeric = Number(String(value).replace('%', '').trim())
+  if (!Number.isFinite(numeric)) return null
+  return Math.max(0, Math.min(100, numeric))
+}
+
+function usagePercentText(value: number | null) {
+  return value === null ? '未知' : `${value.toFixed(Number.isInteger(value) ? 0 : 1)}%`
+}
+
+function usagePercentWidth(value: number | null) {
+  return value === null ? 0 : value
+}
+
+function accountLastUsedLabel(account: Account) {
+  return formatDateTime(account.last_used_at)
+}
+
 function accountSchedule(account: Account) {
   if (account.temp_unschedulable_until) return '临时不可调度'
   if (account.schedulable === false) return '不可调度'
@@ -678,8 +871,8 @@ function accountErrorText(account: Account) {
 function accountUsageRows(account: Account) {
   const extra = (account.extra || {}) as Record<string, unknown>
   return [
-    ['短窗用量', extra.codex_primary_used_percent ?? extra.codex_5h_used_percent],
-    ['长窗用量', extra.codex_secondary_used_percent ?? extra.codex_7d_used_percent],
+    ['5h 用量', extra.codex_primary_used_percent ?? extra.codex_5h_used_percent],
+    ['7d 用量', extra.codex_secondary_used_percent ?? extra.codex_7d_used_percent],
     ['窗口开始', account.session_window_start],
     ['窗口结束', account.session_window_end],
     ['窗口状态', account.session_window_status],
@@ -1052,33 +1245,20 @@ onMounted(refreshMe)
               <label>搜索<input v-model="accountFilters.search" placeholder="名称、备注或标识" /></label>
               <label>平台
                 <select v-model="accountFilters.platform">
-                  <option value="">全部</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="antigravity">Antigravity</option>
+                  <option value="">全部平台</option>
+                  <option v-for="option in platformOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
                 </select>
               </label>
               <label>状态
                 <select v-model="accountFilters.status">
-                  <option value="">全部</option>
-                  <option value="active">active</option>
-                  <option value="disabled">disabled</option>
-                  <option value="error">error</option>
-                  <option value="unused">unused</option>
-                  <option value="used">used</option>
-                  <option value="expired">expired</option>
+                  <option value="">全部状态</option>
+                  <option v-for="option in accountStatusOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
                 </select>
               </label>
               <label>类型
                 <select v-model="accountFilters.type">
-                  <option value="">全部</option>
-                  <option value="oauth">OAuth</option>
-                  <option value="setup-token">Setup Token</option>
-                  <option value="apikey">API Key</option>
-                  <option value="upstream">Upstream</option>
-                  <option value="bedrock">Bedrock</option>
-                  <option value="service-account">Service Account</option>
+                  <option value="">全部类型</option>
+                  <option v-for="option in accountTypeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
                 </select>
               </label>
               <label>上游分组
@@ -1104,13 +1284,8 @@ onMounted(refreshMe)
               <div class="filter-grid advanced-grid">
                 <label>隐私模式
                   <select v-model="accountFilters.privacyMode">
-                    <option value="">全部</option>
-                    <option value="training_off">OpenAI: training_off</option>
-                    <option value="training_set_failed">OpenAI: training_set_failed</option>
-                    <option value="training_set_cf_blocked">OpenAI: training_set_cf_blocked</option>
-                    <option value="privacy_set">Antigravity: privacy_set</option>
-                    <option value="privacy_set_failed">Antigravity: privacy_set_failed</option>
-                    <option value="__unset__">未设置</option>
+                    <option value="">全部 Privacy 状态</option>
+                    <option v-for="option in privacyModeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
                   </select>
                 </label>
                 <label>排序字段
@@ -1271,8 +1446,15 @@ onMounted(refreshMe)
               <pre v-if="batchRefreshResult" class="inline-json result-json">{{ JSON.stringify(batchRefreshResult.errors || batchRefreshResult.warnings || batchRefreshResult, null, 2) }}</pre>
             </div>
           </section>
-          <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>
-          <div class="table-wrap">
+          <div class="table-shell">
+            <div v-if="accountsLoading" class="table-overlay" aria-live="polite">
+              <div class="overlay-card">
+                <div class="overlay-spinner"></div>
+                <strong>正在加载账号列表</strong>
+                <span>请稍候，当前页内容即将更新。</span>
+              </div>
+            </div>
+            <div class="table-wrap">
             <table class="account-table">
               <thead>
                 <tr>
@@ -1288,11 +1470,55 @@ onMounted(refreshMe)
               <tbody>
                 <tr v-for="account in visibleAccounts" :key="String(account.id || accountName(account))">
                   <td><input type="checkbox" :checked="selectedAccountIds.has(accountID(account))" @change="toggleAccountSelection(account)" /></td>
-                  <td>{{ accountName(account) }}</td>
-                  <td>{{ [account.platform, account.status].filter(Boolean).join(' / ') || '未知' }}</td>
-                  <td>{{ accountGroups(account) }}</td>
-                  <td>{{ accountProxy(account) }} / {{ accountSchedule(account) }}</td>
-                  <td>{{ accountUsage(account) }}<br><span class="muted">{{ formatDateTime(account.last_used_at) }}</span></td>
+                  <td>
+                    <div class="cell-stack">
+                      <span class="muted cell-subtitle">{{ account.id || '未知 ID' }}</span>
+                      <strong class="account-name">{{ accountName(account) }}</strong>
+                      <span v-if="accountNote(account)" class="muted account-note">{{ accountNote(account) }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="cell-stack compact">
+                      <div class="chip-row">
+                        <span class="tag">{{ displayValue(account.platform) }}</span>
+                        <span class="tag muted-tag">{{ displayValue(account.type) }}</span>
+                      </div>
+                      <span class="tag" :class="`tag-${accountStatusTone(account)}`">{{ accountStatusLabel(account) }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="cell-stack compact">
+                      <div class="chip-row wrap group-preview-wrap">
+                        <template v-if="accountGroupPreview(account).items.length">
+                          <button v-for="group in accountGroupPreview(account).items" :key="group.id" type="button" class="chip chip-button" @click="setGroupState(group.id, 'include')">{{ group.name }}</button>
+                          <span v-if="accountGroupPreview(account).extra" class="chip muted-chip chip-more">+{{ accountGroupPreview(account).extra }}</span>
+                        </template>
+                        <span v-else class="muted">未分组</span>
+                        <div v-if="accountGroupEntries(account).length > 2" class="group-popover">
+                          <span class="muted popover-label">完整分组</span>
+                          <button v-for="group in accountGroupEntries(account)" :key="`${accountID(account)}-${group.id}`" type="button" class="chip chip-button popover-chip" @click.stop="setGroupState(group.id, 'include')">{{ group.name }}</button>
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="cell-stack compact">
+                      <span class="tag">{{ accountProxy(account) }}</span>
+                      <span class="tag" :class="`tag-${accountScheduleTone(account)}`">{{ accountSchedule(account) }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="cell-stack compact">
+                      <div v-for="metric in accountUsageMetrics(account)" :key="metric.label" class="usage-row">
+                        <span class="usage-meta">{{ metric.label }}</span>
+                        <div class="usage-bar-shell">
+                          <div class="usage-bar" :class="{ unknown: metric.value === null }" :style="{ width: `${usagePercentWidth(metric.value)}%` }"></div>
+                        </div>
+                        <strong class="usage-value">{{ metric.text }}</strong>
+                      </div>
+                      <span class="muted cell-subtitle">最近使用：{{ accountLastUsedLabel(account) }}</span>
+                    </div>
+                  </td>
                   <td class="row-actions">
                     <button class="secondary" @click="openAccountDetail(account)">详情</button>
                     <button class="secondary" @click="copyText(account.id, '账号 ID')">复制 ID</button>
@@ -1304,12 +1530,18 @@ onMounted(refreshMe)
                 </tr>
               </tbody>
             </table>
+            </div>
           </div>
           <p v-if="accountPager.loaded && visibleAccounts.length !== accounts.length" class="muted">当前页本地筛选命中 {{ visibleAccounts.length }} / {{ accounts.length }} 条。</p>
           <div class="pager">
+            <button class="secondary" :disabled="accountPager.page <= 1 || accountsLoading" @click="goFirstAccounts">首页</button>
             <button class="secondary" :disabled="accountPager.page <= 1 || accountsLoading" @click="goPrevAccounts">上一页</button>
+            <button v-for="page in accountPageButtons" :key="page" class="secondary" :class="{ active: page === accountPager.page }" :disabled="page === accountPager.page || accountsLoading" @click="goAccountPage(page)">{{ page }}</button>
             <span class="muted">第 {{ accountPager.page }} 页<span v-if="accountTotalPages"> / 共 {{ accountTotalPages }} 页</span></span>
             <button class="secondary" :disabled="!hasNextAccountPage || accountsLoading" @click="goNextAccounts">下一页</button>
+            <button class="secondary" :disabled="!hasNextAccountPage || accountsLoading" @click="goLastAccounts">末页</button>
+            <label class="jump-label muted">跳页<input v-model="accountPageJump" type="number" min="1" :max="accountTotalPages || undefined" @keyup.enter="jumpToAccountPage" /></label>
+            <button class="secondary" :disabled="!accountTotalPages || accountsLoading" @click="jumpToAccountPage">跳转</button>
             <span v-if="accountPager.total" class="muted">共 {{ accountPager.total }} 条</span>
           </div>
         </section>
@@ -1484,13 +1716,73 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .result-grid div { display: grid; gap: 4px; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 12px; background: rgba(15, 23, 42, 0.45); }
 .result-json { max-width: none; margin-top: 10px; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.table-shell { position: relative; }
+.table-overlay {
+  position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; min-height: 180px;
+  background: rgba(2, 6, 23, 0.38); backdrop-filter: blur(2px);
+}
+.overlay-card {
+  display: grid; justify-items: center; gap: 8px; padding: 18px 20px; border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 16px; background: rgba(15, 23, 42, 0.94); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.36);
+}
+.overlay-card span { color: #94a3b8; font-size: 13px; }
+.overlay-spinner { width: 22px; height: 22px; border-radius: 999px; border: 2px solid rgba(148, 163, 184, 0.24); border-top-color: #8b5cf6; animation: spin 0.9s linear infinite; }
 .table-wrap { overflow-x: auto; margin-top: 12px; }
 .account-table { width: 100%; min-width: 720px; border-collapse: collapse; }
 .account-table th,
 .account-table td { padding: 12px 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); text-align: left; vertical-align: top; }
 .account-table th { color: #cbd5e1; font-size: 14px; }
 .account-table td:last-child { white-space: nowrap; }
+.account-table td:nth-child(2),
+.account-table td:nth-child(3),
+.account-table td:nth-child(4),
+.account-table td:nth-child(5),
+.account-table td:nth-child(6) { min-width: 150px; }
+.account-table td:nth-child(2) { max-width: 300px; }
+.account-name { display: block; max-width: 280px; overflow-wrap: anywhere; line-height: 1.35; }
+.account-note { display: block; max-width: 280px; overflow-wrap: anywhere; line-height: 1.4; }
+.cell-stack { display: grid; gap: 6px; }
+.cell-stack.compact { gap: 8px; }
+.cell-subtitle { font-size: 12px; }
+.chip-row { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; overflow: hidden; }
+.chip-row.wrap { flex-wrap: wrap; }
+.tag, .chip {
+  display: inline-flex; align-items: center; max-width: 100%; padding: 4px 8px; border-radius: 999px;
+  background: rgba(148, 163, 184, 0.14); color: #e2e8f0; font-size: 12px; line-height: 1.2; white-space: nowrap;
+}
+.chip { background: rgba(59, 130, 246, 0.14); color: #dbeafe; }
+.chip-button { border: 0; cursor: pointer; }
+.tag-success { background: rgba(34, 197, 94, 0.16); color: #bbf7d0; }
+.tag-warning { background: rgba(245, 158, 11, 0.16); color: #fde68a; }
+.tag-danger { background: rgba(239, 68, 68, 0.16); color: #fecaca; }
+.tag-info { background: rgba(14, 165, 233, 0.16); color: #bae6fd; }
+.tag-neutral { background: rgba(148, 163, 184, 0.14); color: #e2e8f0; }
+.muted-tag, .muted-chip { opacity: 0.78; }
+.group-preview-wrap { position: relative; overflow: visible; }
+.group-preview-wrap::after {
+  content: ""; position: absolute; left: 0; top: 100%; z-index: 5; display: none; width: 100%; height: 12px;
+}
+.group-preview-wrap:hover::after,
+.group-preview-wrap:focus-within::after { display: block; }
+.group-popover {
+  position: absolute; left: 0; top: calc(100% + 8px); z-index: 6; min-width: 220px; max-width: 380px; display: none;
+  gap: 8px; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 14px; background: rgba(15, 23, 42, 0.98);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.34);
+}
+.group-preview-wrap:hover .group-popover,
+.group-preview-wrap:focus-within .group-popover { display: flex; flex-wrap: wrap; }
+.popover-label { width: 100%; font-size: 12px; }
+.popover-chip { white-space: normal; }
+.usage-row { display: grid; grid-template-columns: 36px minmax(90px, 1fr) 54px; gap: 8px; align-items: center; }
+.usage-meta { color: #cbd5e1; font-size: 12px; }
+.usage-bar-shell { height: 8px; overflow: hidden; border-radius: 999px; background: rgba(148, 163, 184, 0.18); }
+.usage-bar { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #22c55e, #38bdf8, #8b5cf6); }
+.usage-bar.unknown { width: 0 !important; background: rgba(148, 163, 184, 0.42); }
+.usage-value { color: #f8fafc; font-size: 12px; }
 .pager { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+.pager .active { background: linear-gradient(135deg, #8b5cf6, #2563eb); }
+.jump-label { display: inline-flex; flex-direction: row; gap: 8px; align-items: center; }
+.jump-label input { width: 90px; padding: 9px 10px; }
 .site-card, .account-card { padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(15, 23, 42, 0.58); }
 .site-card.active { border-color: rgba(196, 181, 253, 0.72); }
 .site-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
@@ -1513,9 +1805,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .layout-grid { grid-template-columns: 1fr; }
   .topbar { align-items: flex-start; flex-direction: column; }
   .overview-card.wide { grid-column: auto; }
+  .account-table { min-width: 960px; }
 }
 @keyframes progress-slide {
   0% { transform: translateX(-110%); }
   100% { transform: translateX(260%); }
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>

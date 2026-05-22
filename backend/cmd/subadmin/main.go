@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -358,6 +360,15 @@ func requireAuth(w http.ResponseWriter, r *http.Request, manager *auth.Manager) 
 func writeSiteError(w http.ResponseWriter, err error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "site not found")
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		writeError(w, http.StatusGatewayTimeout, "upstream request timed out")
+		return
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		writeError(w, http.StatusGatewayTimeout, "upstream request timed out")
 		return
 	}
 	writeError(w, http.StatusBadRequest, err.Error())
