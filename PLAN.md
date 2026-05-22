@@ -4,7 +4,7 @@
 
 SubAdmin is a lightweight management panel for sub2api. It acts as a server-side BFF: the browser talks only to SubAdmin, and SubAdmin talks to sub2api admin APIs with credentials stored server-side.
 
-The near-term priority is a safe read-only management experience. Import, batch updates, and destructive operations come later and must include preview, confirmation, job tracking, and audit logs.
+The near-term priority is a safe read-only management experience plus low-risk account maintenance. Destructive operations and account mutations come later and must include preview, confirmation, job tracking, and audit logs.
 
 ## Security Baseline
 
@@ -64,7 +64,7 @@ Completed:
 - Copy helpers added for account ID, account name, and active filter summary.
 
 Next:
-- Import preview workflow.
+- Account maintenance: batch testing for selected accounts.
 
 ## Phase 3: Protected Docs Integration
 
@@ -76,7 +76,23 @@ Status: complete for current scope.
 - AI Reference is fetched through the protected docs route and rendered in-app.
 - Separate docs deployment is no longer required for current bundled docs.
 
-## Phase 4: Import Preview Workflow
+## Phase 4: Account Maintenance - Batch Testing
+
+Status: in progress. This phase is read-only from SubAdmin's perspective and reuses upstream account test endpoints.
+
+Completed:
+
+- Select accounts from the current account table.
+- Run batch tests for selected accounts.
+- Reuse sub2api's existing single-account test endpoint for each account.
+- Keep a conservative batch limit of 20 accounts and sequential execution in the first version.
+- Show per-account test results with success/failure, status code, duration, and sanitized response text.
+
+Next:
+
+- Later, promote batch tests into persisted Jobs with retry and history.
+
+## Phase 5: Import Preview Workflow
 
 Status: planned. Preview first, no upstream writes initially.
 
@@ -86,7 +102,7 @@ Status: planned. Preview first, no upstream writes initially.
 - Apply draft import settings such as default group, proxy, priority, concurrency, and naming rules.
 - Do not call upstream write APIs until explicit confirmation and job/audit infrastructure exist.
 
-## Phase 5: Import Templates
+## Phase 6: Import Templates
 
 Status: planned.
 
@@ -94,7 +110,7 @@ Status: planned.
 - Template fields may include default platform, account type, group, proxy, priority, concurrency, notes, and naming rules.
 - Use templates during import preview before any write operation is allowed.
 
-## Phase 6: Jobs And Audit Logs
+## Phase 7: Jobs And Audit Logs
 
 Status: planned and required before risky write operations.
 
@@ -103,7 +119,7 @@ Status: planned and required before risky write operations.
 - Record action, site, target identifiers, timestamp, session/IP metadata, and result.
 - Keep audit records for failed and cancelled operations too.
 
-## Phase 7: Account Management And Batch Operations
+## Phase 8: Account Management And Batch Operations
 
 Status: planned after Phase 6.
 
@@ -127,7 +143,7 @@ Requirements for high-risk operations:
 - Audit log entry.
 - Conservative limits and clear error reporting.
 
-## Phase 8: Hardening And Polish
+## Phase 9: Hardening And Polish
 
 Status: ongoing.
 
@@ -139,4 +155,4 @@ Status: ongoing.
 
 ## Immediate Next Step
 
-Start Phase 4 import preview workflow. Keep it preview-only and do not call upstream write APIs.
+Implement Phase 4 minimal batch account testing for selected accounts. Keep it conservative and do not modify upstream account data.

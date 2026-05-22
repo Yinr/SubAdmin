@@ -278,6 +278,38 @@ func (s *Service) AdminGET(ctx context.Context, id int64, path string, query url
 	return json.RawMessage(body), resp.StatusCode, nil
 }
 
+func (s *Service) AdminPOSTJSON(ctx context.Context, id int64, path string, payload any) (json.RawMessage, int, error) {
+	stored, err := s.getStored(ctx, id)
+	if err != nil {
+		return nil, 0, err
+	}
+	adminKey, err := s.box.Decrypt(stored.AdminKeyCiphertext)
+	if err != nil {
+		return nil, 0, err
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, 0, err
+	}
+	endpoint := strings.TrimRight(stored.BaseURL, "/") + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", adminKey)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return json.RawMessage(respBody), resp.StatusCode, nil
+}
+
 type storedSite struct {
 	ID                 int64
 	Name               string

@@ -161,6 +161,10 @@ func main() {
 			return
 		}
 		if action == "accounts" {
+			if r.Method == http.MethodPost {
+				writeBatchAccountTest(w, r, siteService, id)
+				return
+			}
 			if r.Method != http.MethodGet {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
@@ -347,6 +351,46 @@ func writeSiteError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, http.StatusBadRequest, err.Error())
+}
+
+func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
+	var input struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if len(input.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "ids is required")
+		return
+	}
+	if len(input.IDs) > 20 {
+		writeError(w, http.StatusBadRequest, "at most 20 accounts can be tested at once")
+		return
+	}
+	results := make([]map[string]any, 0, len(input.IDs))
+	for _, accountID := range input.IDs {
+		if accountID <= 0 {
+			results = append(results, map[string]any{"id": accountID, "ok": false, "error": "invalid account id"})
+			continue
+		}
+		started := time.Now()
+		data, statusCode, err := siteService.AdminPOSTJSON(r.Context(), siteID, fmt.Sprintf("/api/v1/admin/accounts/%d/test", accountID), map[string]any{})
+		result := map[string]any{
+			"id":         accountID,
+			"statusCode": statusCode,
+			"durationMs": time.Since(started).Milliseconds(),
+			"ok":         err == nil && statusCode >= 200 && statusCode < 300,
+		}
+		if err != nil {
+			result["error"] = err.Error()
+		} else {
+			result["body"] = string(sanitizeJSONForBrowser(data))
+		}
+		results = append(results, result)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": results})
 }
 
 func shellPage() string {

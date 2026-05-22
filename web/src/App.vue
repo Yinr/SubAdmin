@@ -28,8 +28,11 @@ const accountError = ref('')
 const copyNotice = ref('')
 const docsError = ref('')
 const aiReference = ref('')
+const batchTestError = ref('')
 const accounts = ref<Account[]>([])
 const groups = ref<Group[]>([])
+const batchTestResults = ref<Record<string, unknown>[]>([])
+const selectedAccountIds = ref<Set<string>>(new Set())
 const activeSiteId = ref<number | null>(null)
 const editingSite = ref<Site | null>(null)
 const selectedAccount = ref<Account | null>(null)
@@ -41,6 +44,7 @@ const accountsLoading = ref(false)
 const groupsLoading = ref(false)
 const savingSite = ref(false)
 const docsLoading = ref(false)
+const batchTesting = ref(false)
 const activeView = ref<ViewMode>('accounts')
 
 const siteForm = reactive({
@@ -105,6 +109,10 @@ const visibleAccounts = computed(() => {
 const groupFilterItems = computed(() => groupOptions.value.filter((group) => groupState(group.id) !== 'any'))
 
 const addableGroupOptions = computed(() => groupOptions.value.filter((group) => groupState(group.id) === 'any'))
+
+const selectedAccountCount = computed(() => selectedAccountIds.value.size)
+
+const allVisibleSelected = computed(() => visibleAccounts.value.length > 0 && visibleAccounts.value.every((account) => selectedAccountIds.value.has(accountID(account))))
 
 const activeSite = computed(() => sites.value.find((site) => site.id === activeSiteId.value) || null)
 
@@ -407,6 +415,36 @@ function accountName(account: Account) {
   return String(account.name || account.email || extra.name || extra.email || account.id || '未命名账号')
 }
 
+function accountID(account: Account) {
+  return String(account.id || '')
+}
+
+function toggleAccountSelection(account: Account) {
+  const id = accountID(account)
+  if (!id) return
+  const next = new Set(selectedAccountIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedAccountIds.value = next
+}
+
+function toggleAllVisibleAccounts() {
+  const next = new Set(selectedAccountIds.value)
+  if (allVisibleSelected.value) {
+    visibleAccounts.value.forEach((account) => next.delete(accountID(account)))
+  } else {
+    visibleAccounts.value.forEach((account) => {
+      const id = accountID(account)
+      if (id) next.add(id)
+    })
+  }
+  selectedAccountIds.value = next
+}
+
+function clearAccountSelection() {
+  selectedAccountIds.value = new Set()
+}
+
 function accountGroups(account: Account) {
   const names = accountGroupEntries(account).map((group) => group.name)
   return names.length ? names.join(' / ') : '未分组'
@@ -578,6 +616,33 @@ function redactAccountValue(key: string, value: unknown): unknown {
 
 function accountDetailJSON(account: Account) {
   return JSON.stringify(redactAccountValue('account', account), null, 2)
+}
+
+async function testSelectedAccounts() {
+  batchTestError.value = ''
+  batchTestResults.value = []
+  if (!activeSiteId.value) {
+    batchTestError.value = '请先选择站点'
+    return
+  }
+  const ids = Array.from(selectedAccountIds.value).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+  if (!ids.length) {
+    batchTestError.value = '请先选择账号'
+    return
+  }
+  if (ids.length > 20) {
+    batchTestError.value = '一次最多检测 20 个账号'
+    return
+  }
+  batchTesting.value = true
+  try {
+    const payload = await api<{ items: Record<string, unknown>[] }>(`api/sites/${activeSiteId.value}/accounts`, { method: 'POST', body: JSON.stringify({ ids }) })
+    batchTestResults.value = payload.items || []
+  } catch (error) {
+    batchTestError.value = error instanceof Error ? error.message : '批量检测失败'
+  } finally {
+    batchTesting.value = false
+  }
 }
 
 async function copyText(value: unknown, label: string) {
@@ -845,12 +910,19 @@ onMounted(refreshMe)
             当前筛选：{{ activeAccountFilters }}
             <button type="button" class="mini" @click="copyText(activeAccountFilters, '筛选条件')">复制</button>
           </p>
+          <div class="batch-toolbar">
+            <span class="muted">已选择 {{ selectedAccountCount }} 个账号，批量检测会顺序调用上游单账号测试接口。</span>
+            <button class="secondary" :disabled="batchTesting || selectedAccountCount === 0" @click="testSelectedAccounts">{{ batchTesting ? '检测中...' : '检测选中账号' }}</button>
+            <button class="secondary" :disabled="selectedAccountCount === 0" @click="clearAccountSelection">清空选择</button>
+          </div>
+          <p v-if="batchTestError" class="error">{{ batchTestError }}</p>
           <p v-if="copyNotice" class="muted">{{ copyNotice }}</p>
           <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>
           <div class="table-wrap">
             <table class="account-table">
               <thead>
                 <tr>
+                  <th><input type="checkbox" :checked="allVisibleSelected" @change="toggleAllVisibleAccounts" /></th>
                   <th>名称</th>
                   <th>平台/状态</th>
                   <th>分组</th>
@@ -861,6 +933,7 @@ onMounted(refreshMe)
               </thead>
               <tbody>
                 <tr v-for="account in visibleAccounts" :key="String(account.id || accountName(account))">
+                  <td><input type="checkbox" :checked="selectedAccountIds.has(accountID(account))" @change="toggleAccountSelection(account)" /></td>
                   <td>{{ accountName(account) }}</td>
                   <td>{{ [account.platform, account.status].filter(Boolean).join(' / ') || '未知' }}</td>
                   <td>{{ accountGroups(account) }}</td>
@@ -873,11 +946,31 @@ onMounted(refreshMe)
                   </td>
                 </tr>
                 <tr v-if="!visibleAccounts.length">
-                  <td colspan="6" class="muted">{{ accountPager.loaded ? '没有匹配的账号。' : '请选择站点并查询账号。' }}</td>
+                  <td colspan="7" class="muted">{{ accountPager.loaded ? '没有匹配的账号。' : '请选择站点并查询账号。' }}</td>
                 </tr>
               </tbody>
             </table>
           </div>
+          <section v-if="batchTestResults.length" class="batch-results">
+            <div class="panel-head">
+              <h2>批量检测结果</h2>
+              <button class="secondary" @click="copyText(JSON.stringify(batchTestResults, null, 2), '检测结果')">复制结果</button>
+            </div>
+            <div class="table-wrap">
+              <table class="account-table">
+                <thead><tr><th>账号 ID</th><th>结果</th><th>HTTP</th><th>耗时</th><th>响应摘要</th></tr></thead>
+                <tbody>
+                  <tr v-for="result in batchTestResults" :key="String(result.id)">
+                    <td>{{ result.id }}</td>
+                    <td>{{ result.ok ? '成功' : '失败' }}</td>
+                    <td>{{ result.statusCode || '未知' }}</td>
+                    <td>{{ result.durationMs ?? '未知' }} ms</td>
+                    <td><pre class="inline-json">{{ result.error || result.body || '无响应内容' }}</pre></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
           <p v-if="accountPager.loaded && visibleAccounts.length !== accounts.length" class="muted">当前页本地筛选命中 {{ visibleAccounts.length }} / {{ accounts.length }} 条。</p>
           <div class="pager">
             <button class="secondary" :disabled="accountPager.page <= 1 || accountsLoading" @click="goPrevAccounts">上一页</button>
@@ -1020,6 +1113,7 @@ input, select {
   width: 100%; box-sizing: border-box; padding: 12px 13px; border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 12px; color: #f8fafc; background: rgba(15, 23, 42, 0.86); outline: none;
 }
+input[type="checkbox"] { width: auto; }
 button {
   border: 0; border-radius: 12px; padding: 11px 14px; color: #fff; background: linear-gradient(135deg, #7c3aed, #2563eb);
   cursor: pointer; font-weight: 700;
@@ -1031,6 +1125,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .danger { background: rgba(239, 68, 68, 0.16); color: #fecaca; }
 .site-list, .account-list { display: grid; gap: 12px; }
 .filter-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.batch-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 14px; background: rgba(2, 6, 23, 0.22); }
+.batch-results { display: grid; gap: 10px; margin-top: 14px; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .table-wrap { overflow-x: auto; margin-top: 12px; }
 .account-table { width: 100%; min-width: 720px; border-collapse: collapse; }
@@ -1055,6 +1151,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .detail-grid span { color: #94a3b8; }
 .detail-grid strong { overflow-wrap: anywhere; }
 .detail-json { overflow: auto; max-height: 360px; padding: 14px; border-radius: 14px; background: rgba(2, 6, 23, 0.55); color: #dbeafe; font-size: 12px; line-height: 1.55; }
+.inline-json { max-width: 520px; max-height: 160px; overflow: auto; margin: 0; white-space: pre-wrap; color: #dbeafe; font-size: 12px; }
 .modal-actions { justify-content: flex-end; }
 @media (max-width: 900px) {
   .layout-grid { grid-template-columns: 1fr; }
