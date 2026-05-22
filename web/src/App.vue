@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 
 type Site = {
   id: number
@@ -34,6 +34,8 @@ const accounts = ref<Account[]>([])
 const groups = ref<Group[]>([])
 const batchTestResults = ref<Record<string, unknown>[]>([])
 const batchRefreshResult = ref<Record<string, unknown> | null>(null)
+const batchTestScroll = ref<HTMLElement | null>(null)
+const batchRefreshScroll = ref<HTMLElement | null>(null)
 const selectedAccountIds = ref<Set<string>>(new Set())
 const activeSiteId = ref<number | null>(null)
 const editingSite = ref<Site | null>(null)
@@ -50,6 +52,11 @@ const batchTesting = ref(false)
 const batchRefreshing = ref(false)
 const batchCollecting = ref(false)
 const activeView = ref<ViewMode>('accounts')
+const batchTestTotal = ref(0)
+const batchTestDone = ref(0)
+const batchRefreshTotal = ref(0)
+const batchRefreshDone = ref(0)
+const filteredAccountIDsCache = new Map<string, number[]>()
 
 const siteForm = reactive({
   name: '',
@@ -129,6 +136,12 @@ const upstreamGroupOptions = computed(() => [{ id: 'ungrouped', name: '未分组
 const selectedAccountCount = computed(() => selectedAccountIds.value.size)
 
 const failedBatchTestIDs = computed(() => batchTestResults.value.filter((result) => !isBatchResultPending(result) && result.ok !== true).map((result) => Number(result.id)).filter((id) => Number.isFinite(id) && id > 0))
+
+const filteredIDCacheHit = computed(() => filteredAccountIDsCache.has(currentFilteredIDsCacheKey()))
+
+const batchTestProgress = computed(() => progressPercent(batchTestDone.value, batchTestTotal.value))
+
+const batchRefreshProgress = computed(() => progressPercent(batchRefreshDone.value, batchRefreshTotal.value))
 
 const allVisibleSelected = computed(() => visibleAccounts.value.length > 0 && visibleAccounts.value.every((account) => selectedAccountIds.value.has(accountID(account))))
 
@@ -368,6 +381,16 @@ function buildAccountQuery(page: number, pageSize: number) {
   return params
 }
 
+function currentFilteredIDsCacheKey() {
+  const params = buildAccountQuery(1, 100)
+  const localFilters = Object.entries(groupFilterStates)
+    .filter(([, state]) => state !== 'any')
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, state]) => `${id}:${state}`)
+    .join(',')
+  return JSON.stringify({ site: activeSiteId.value, upstream: params.toString(), schedule: scheduleQuickFilter.value, groups: localFilters })
+}
+
 function payloadTotal(payload: any) {
   return Number(payload.total || payload.data?.total || 0)
 }
@@ -479,6 +502,12 @@ async function selectAllFilteredAccounts() {
     batchTestError.value = '请先选择站点'
     return []
   }
+  const cacheKey = currentFilteredIDsCacheKey()
+  const cachedIDs = filteredAccountIDsCache.get(cacheKey)
+  if (cachedIDs) {
+    selectedAccountIds.value = new Set(cachedIDs.map((id) => String(id)))
+    return cachedIDs
+  }
   batchCollecting.value = true
   const ids = new Set<string>()
   const pageSize = 100
@@ -498,8 +527,10 @@ async function selectAllFilteredAccounts() {
       if (!total && pageAccounts.length < pageSize) break
       page += 1
     }
-    selectedAccountIds.value = ids
-    return Array.from(ids).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+    const numericIDs = Array.from(ids).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+    filteredAccountIDsCache.set(cacheKey, numericIDs)
+    selectedAccountIds.value = new Set(numericIDs.map((id) => String(id)))
+    return numericIDs
   } catch (error) {
     batchTestError.value = error instanceof Error ? error.message : '收集筛选账号失败'
     return []
@@ -726,6 +757,8 @@ async function refreshAccountTokenIDs(ids: number[]) {
   }
   const ok = window.confirm(`将刷新 ${ids.length} 个账号的 OAuth 令牌，这会修改上游账号凭证。确认继续？`)
   if (!ok) return
+  batchRefreshTotal.value = ids.length
+  batchRefreshDone.value = 0
   batchRefreshing.value = true
   try {
     const payload = await api<Record<string, unknown>>(`api/sites/${activeSiteId.value}/accounts/refresh`, {
@@ -733,6 +766,7 @@ async function refreshAccountTokenIDs(ids: number[]) {
       body: JSON.stringify({ ids }),
     })
     batchRefreshResult.value = payload
+    batchRefreshDone.value = Number(payload.success || 0) + Number(payload.failed || 0)
     await loadAccounts({ force: true })
   } catch (error) {
     batchRefreshError.value = error instanceof Error ? error.message : '批量刷新令牌失败'
@@ -753,6 +787,8 @@ async function testAccountIDs(ids: number[]) {
     batchTestError.value = '请先选择账号'
     return
   }
+  batchTestTotal.value = ids.length
+  batchTestDone.value = 0
   batchTesting.value = true
   try {
     for (const [index, id] of ids.entries()) {
@@ -764,6 +800,7 @@ async function testAccountIDs(ids: number[]) {
       })
       const result = payload.items?.[0] || { id, ok: false, error: '无检测结果' }
       batchTestResults.value = batchTestResults.value.map((item) => String(item.id) === String(id) ? result : item)
+      batchTestDone.value += 1
     }
   } catch (error) {
     batchTestError.value = error instanceof Error ? error.message : '批量检测失败'
@@ -803,6 +840,16 @@ function batchResultHint(result: Record<string, unknown>) {
   return result.hint || result.resetAt || '无明确提示'
 }
 
+function progressPercent(done: number, total: number) {
+  if (!total) return 0
+  return Math.min(100, Math.round((done / total) * 100))
+}
+
+function scrollToBottom(el: HTMLElement | null) {
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+
 async function retryFailedBatchTests() {
   if (!failedBatchTestIDs.value.length) return
   selectedAccountIds.value = new Set(failedBatchTestIDs.value.map((id) => String(id)))
@@ -826,6 +873,16 @@ async function copyText(value: unknown, label: string) {
     copyNotice.value = ''
   }, 1800)
 }
+
+watch(() => batchTestResults.value.length, async () => {
+  await nextTick()
+  scrollToBottom(batchTestScroll.value)
+})
+
+watch(batchRefreshResult, async () => {
+  await nextTick()
+  scrollToBottom(batchRefreshScroll.value)
+})
 
 onMounted(refreshMe)
 </script>
@@ -1083,6 +1140,7 @@ onMounted(refreshMe)
           <p v-if="activeAccountFilters" class="muted filter-summary">
             当前筛选：{{ activeAccountFilters }}
             <button type="button" class="mini" @click="copyText(activeAccountFilters, '筛选条件')">复制</button>
+            <span v-if="filteredIDCacheHit" class="pill">已缓存筛选 ID</span>
           </p>
           <div class="batch-toolbar">
             <span class="muted">已选择 {{ selectedAccountCount }} 个账号，OpenAI 留空默认模型为 gpt-5.4；检测会逐个账号执行并追加结果。</span>
@@ -1111,6 +1169,57 @@ onMounted(refreshMe)
           <p v-if="batchTestError" class="error">{{ batchTestError }}</p>
           <p v-if="batchRefreshError" class="error">{{ batchRefreshError }}</p>
           <p v-if="copyNotice" class="muted">{{ copyNotice }}</p>
+          <section v-if="batchTestResults.length" class="batch-results result-panel">
+            <div class="panel-head">
+              <div>
+                <h2>批量检测结果</h2>
+                <p class="muted">{{ batchTestDone }} / {{ batchTestTotal || batchTestResults.length }} 完成</p>
+              </div>
+              <div class="actions compact-actions">
+                <button class="secondary" @click="copyText(JSON.stringify(batchTestResults, null, 2), '检测结果')">复制结果</button>
+                <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="copyFailedBatchTestIDs">复制失败账号 ID</button>
+                <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="retryFailedBatchTests">只重试失败项</button>
+              </div>
+            </div>
+            <div class="progress-track"><div class="progress-bar" :style="{ width: `${batchTestProgress}%` }"></div></div>
+            <div ref="batchTestScroll" class="result-scroll table-wrap">
+              <table class="account-table result-table">
+                <thead><tr><th>账号 ID</th><th>结果</th><th>模型</th><th>HTTP</th><th>耗时</th><th>提示</th><th>摘要</th></tr></thead>
+                <tbody>
+                  <tr v-for="result in batchTestResults" :key="String(result.id)">
+                    <td>{{ result.id }}</td>
+                    <td>{{ batchResultLabel(result) }}</td>
+                    <td>{{ result.model || '未知' }}</td>
+                    <td>{{ result.statusCode || '未知' }}</td>
+                    <td>{{ result.durationMs ?? '未知' }} ms</td>
+                    <td>{{ batchResultHint(result) }}</td>
+                    <td><pre class="inline-json">{{ result.message || result.error || '无响应内容' }}</pre></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section v-if="batchRefreshing || batchRefreshResult" class="batch-results result-panel">
+            <div class="panel-head">
+              <div>
+                <h2>批量刷新令牌结果</h2>
+                <p class="muted">{{ batchRefreshDone }} / {{ batchRefreshTotal }} 完成</p>
+              </div>
+              <div class="actions compact-actions">
+                <button v-if="batchRefreshResult" class="secondary" @click="copyText(JSON.stringify(batchRefreshResult, null, 2), '刷新令牌结果')">复制结果</button>
+              </div>
+            </div>
+            <div class="progress-track"><div class="progress-bar" :class="{ indeterminate: batchRefreshing && batchRefreshDone === 0 }" :style="{ width: `${batchRefreshProgress}%` }"></div></div>
+            <div ref="batchRefreshScroll" class="result-scroll refresh-result-scroll">
+              <div v-if="batchRefreshResult" class="result-grid">
+                <div><span class="muted">总数</span><strong>{{ batchRefreshResult.total ?? '未知' }}</strong></div>
+                <div><span class="muted">成功</span><strong>{{ batchRefreshResult.success ?? '未知' }}</strong></div>
+                <div><span class="muted">失败</span><strong>{{ batchRefreshResult.failed ?? '未知' }}</strong></div>
+              </div>
+              <p v-else class="muted">正在等待 sub2api 批量刷新返回结果...</p>
+              <pre v-if="batchRefreshResult" class="inline-json result-json">{{ JSON.stringify(batchRefreshResult.errors || batchRefreshResult.warnings || batchRefreshResult, null, 2) }}</pre>
+            </div>
+          </section>
           <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>
           <div class="table-wrap">
             <table class="account-table">
@@ -1145,46 +1254,6 @@ onMounted(refreshMe)
               </tbody>
             </table>
           </div>
-          <section v-if="batchTestResults.length" class="batch-results">
-            <div class="panel-head">
-              <h2>批量检测结果</h2>
-              <div class="actions compact-actions">
-                <button class="secondary" @click="copyText(JSON.stringify(batchTestResults, null, 2), '检测结果')">复制结果</button>
-                <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="copyFailedBatchTestIDs">复制失败账号 ID</button>
-                <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="retryFailedBatchTests">只重试失败项</button>
-              </div>
-            </div>
-            <div class="table-wrap">
-              <table class="account-table">
-                <thead><tr><th>账号 ID</th><th>结果</th><th>模型</th><th>HTTP</th><th>耗时</th><th>提示</th><th>摘要</th></tr></thead>
-                <tbody>
-                  <tr v-for="result in batchTestResults" :key="String(result.id)">
-                    <td>{{ result.id }}</td>
-                    <td>{{ batchResultLabel(result) }}</td>
-                    <td>{{ result.model || '未知' }}</td>
-                    <td>{{ result.statusCode || '未知' }}</td>
-                    <td>{{ result.durationMs ?? '未知' }} ms</td>
-                    <td>{{ batchResultHint(result) }}</td>
-                    <td><pre class="inline-json">{{ result.message || result.error || '无响应内容' }}</pre></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
-          <section v-if="batchRefreshResult" class="batch-results">
-            <div class="panel-head">
-              <h2>批量刷新令牌结果</h2>
-              <div class="actions compact-actions">
-                <button class="secondary" @click="copyText(JSON.stringify(batchRefreshResult, null, 2), '刷新令牌结果')">复制结果</button>
-              </div>
-            </div>
-            <div class="result-grid">
-              <div><span class="muted">总数</span><strong>{{ batchRefreshResult.total ?? '未知' }}</strong></div>
-              <div><span class="muted">成功</span><strong>{{ batchRefreshResult.success ?? '未知' }}</strong></div>
-              <div><span class="muted">失败</span><strong>{{ batchRefreshResult.failed ?? '未知' }}</strong></div>
-            </div>
-            <pre class="inline-json">{{ JSON.stringify(batchRefreshResult.errors || batchRefreshResult.warnings || batchRefreshResult, null, 2) }}</pre>
-          </section>
           <p v-if="accountPager.loaded && visibleAccounts.length !== accounts.length" class="muted">当前页本地筛选命中 {{ visibleAccounts.length }} / {{ accounts.length }} 条。</p>
           <div class="pager">
             <button class="secondary" :disabled="accountPager.page <= 1 || accountsLoading" @click="goPrevAccounts">上一页</button>
@@ -1342,8 +1411,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .filter-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .batch-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 14px; background: rgba(2, 6, 23, 0.22); }
 .batch-results { display: grid; gap: 10px; margin-top: 14px; }
+.result-panel { padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(2, 6, 23, 0.24); }
+.result-scroll { max-height: 320px; overflow: auto; border-radius: 12px; border: 1px solid rgba(148, 163, 184, 0.12); }
+.refresh-result-scroll { padding: 12px; background: rgba(15, 23, 42, 0.28); }
+.result-table { min-width: 860px; }
+.progress-track { height: 10px; overflow: hidden; border-radius: 999px; background: rgba(148, 163, 184, 0.18); }
+.progress-bar { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #22c55e, #38bdf8, #8b5cf6); transition: width 0.2s ease; }
+.progress-bar.indeterminate { width: 42% !important; animation: progress-slide 1.2s ease-in-out infinite; }
 .result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
 .result-grid div { display: grid; gap: 4px; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 12px; background: rgba(15, 23, 42, 0.45); }
+.result-json { max-width: none; margin-top: 10px; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .table-wrap { overflow-x: auto; margin-top: 12px; }
 .account-table { width: 100%; min-width: 720px; border-collapse: collapse; }
@@ -1374,5 +1451,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .layout-grid { grid-template-columns: 1fr; }
   .topbar { align-items: flex-start; flex-direction: column; }
   .overview-card.wide { grid-column: auto; }
+}
+@keyframes progress-slide {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(260%); }
 }
 </style>
