@@ -24,6 +24,7 @@ const loginError = ref('')
 const sites = ref<Site[]>([])
 const siteError = ref('')
 const accountError = ref('')
+const copyNotice = ref('')
 const accounts = ref<Account[]>([])
 const groups = ref<Group[]>([])
 const activeSiteId = ref<number | null>(null)
@@ -553,6 +554,20 @@ function accountDetailJSON(account: Account) {
   return JSON.stringify(redactAccountValue('account', account), null, 2)
 }
 
+async function copyText(value: unknown, label: string) {
+  const text = String(value || '')
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    copyNotice.value = `已复制${label}`
+  } catch {
+    copyNotice.value = '复制失败，请手动选择文本复制'
+  }
+  window.setTimeout(() => {
+    copyNotice.value = ''
+  }, 1800)
+}
+
 onMounted(refreshMe)
 </script>
 
@@ -761,7 +776,11 @@ onMounted(refreshMe)
             <p v-if="!groupOptions.length && !groupsLoading" class="muted">暂无分组选项；查询账号后也会从当前列表补充分组。</p>
           </section>
           <p v-if="accountError" class="error">{{ accountError }}</p>
-          <p v-if="activeAccountFilters" class="muted">当前筛选：{{ activeAccountFilters }}</p>
+          <p v-if="activeAccountFilters" class="muted filter-summary">
+            当前筛选：{{ activeAccountFilters }}
+            <button type="button" class="mini" @click="copyText(activeAccountFilters, '筛选条件')">复制</button>
+          </p>
+          <p v-if="copyNotice" class="muted">{{ copyNotice }}</p>
           <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>
           <div class="table-wrap">
             <table class="account-table">
@@ -782,7 +801,11 @@ onMounted(refreshMe)
                   <td>{{ accountGroups(account) }}</td>
                   <td>{{ accountProxy(account) }} / {{ accountSchedule(account) }}</td>
                   <td>{{ accountUsage(account) }}<br><span class="muted">{{ formatDateTime(account.last_used_at) }}</span></td>
-                  <td><button class="secondary" @click="openAccountDetail(account)">详情</button></td>
+                  <td class="row-actions">
+                    <button class="secondary" @click="openAccountDetail(account)">详情</button>
+                    <button class="secondary" @click="copyText(account.id, '账号 ID')">复制 ID</button>
+                    <button class="secondary" @click="copyText(accountName(account), '账号名称')">复制名称</button>
+                  </td>
                 </tr>
                 <tr v-if="!visibleAccounts.length">
                   <td colspan="6" class="muted">{{ accountPager.loaded ? '没有匹配的账号。' : '请选择站点并查询账号。' }}</td>
@@ -867,6 +890,8 @@ onMounted(refreshMe)
         </div>
         <pre class="detail-json">{{ accountDetailJSON(selectedAccount) }}</pre>
         <div class="modal-actions">
+          <button type="button" class="secondary" @click="copyText(selectedAccount.id, '账号 ID')">复制 ID</button>
+          <button type="button" class="secondary" @click="copyText(accountName(selectedAccount), '账号名称')">复制名称</button>
           <button type="button" class="secondary" @click="showAccountModal = false">关闭</button>
         </div>
       </section>
@@ -931,8 +956,11 @@ button {
 }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 .secondary { background: rgba(148, 163, 184, 0.14); color: #e2e8f0; }
+.mini { margin-left: 8px; padding: 5px 8px; border-radius: 9px; background: rgba(148, 163, 184, 0.14); color: #e2e8f0; font-size: 12px; }
 .danger { background: rgba(239, 68, 68, 0.16); color: #fecaca; }
 .site-list, .account-list { display: grid; gap: 12px; }
+.filter-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .table-wrap { overflow-x: auto; margin-top: 12px; }
 .account-table { width: 100%; min-width: 720px; border-collapse: collapse; }
 .account-table th,

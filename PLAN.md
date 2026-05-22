@@ -61,10 +61,10 @@ Completed:
 - Lightweight dashboard overview cards based on loaded site/account data.
 - Account detail modal now has clearer read-only sections for basic info, groups/proxy, scheduling, usage, and errors.
 - Filter UI now separates upstream query filters from current-page local filters.
+- Copy helpers added for account ID, account name, and active filter summary.
 
 Next:
-
-- Optional copy helpers for account ID, name, and active filter summary.
+- Protected docs integration.
 
 ## Phase 3: Protected Docs Integration
 
@@ -138,4 +138,4 @@ Status: ongoing.
 
 ## Immediate Next Step
 
-Add optional copy helpers for account ID, account name, and active filter summary.
+Start Phase 3 protected docs integration by exposing logged-in access to existing docs assets through SubAdmin.
