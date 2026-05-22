@@ -642,11 +642,15 @@ async function testSelectedAccounts() {
   }
   batchTesting.value = true
   try {
-    const payload = await api<{ items: Record<string, unknown>[] }>(`api/sites/${activeSiteId.value}/accounts`, {
-      method: 'POST',
-      body: JSON.stringify({ ids, ...batchTestForm }),
-    })
-    batchTestResults.value = payload.items || []
+    for (const id of ids) {
+      batchTestResults.value = [...batchTestResults.value, { id, ok: false, message: '检测中...' }]
+      const payload = await api<{ items: Record<string, unknown>[] }>(`api/sites/${activeSiteId.value}/accounts`, {
+        method: 'POST',
+        body: JSON.stringify({ ids: [id], ...batchTestForm }),
+      })
+      const result = payload.items?.[0] || { id, ok: false, error: '无检测结果' }
+      batchTestResults.value = batchTestResults.value.map((item) => String(item.id) === String(id) ? result : item)
+    }
   } catch (error) {
     batchTestError.value = error instanceof Error ? error.message : '批量检测失败'
   } finally {
@@ -920,7 +924,7 @@ onMounted(refreshMe)
             <button type="button" class="mini" @click="copyText(activeAccountFilters, '筛选条件')">复制</button>
           </p>
           <div class="batch-toolbar">
-            <span class="muted">已选择 {{ selectedAccountCount }} 个账号，批量检测会顺序调用上游单账号测试接口，整批完成后显示结果。</span>
+            <span class="muted">已选择 {{ selectedAccountCount }} 个账号，OpenAI 留空默认模型为 gpt-5.4；检测会逐个账号执行并追加结果。</span>
             <label>测试模型<input v-model="batchTestForm.modelId" placeholder="留空使用 sub2api 默认测试模型" /></label>
             <label>提示词<input v-model="batchTestForm.prompt" placeholder="留空使用上游默认测试提示" /></label>
             <label>模式
@@ -934,7 +938,7 @@ onMounted(refreshMe)
             <button class="secondary" :disabled="batchTesting || selectedAccountCount === 0" @click="testSelectedAccounts">{{ batchTesting ? '检测中...' : '检测选中账号' }}</button>
             <button class="secondary" :disabled="selectedAccountCount === 0" @click="clearAccountSelection">清空选择</button>
           </div>
-          <p v-if="batchTesting" class="muted">正在检测 {{ selectedAccountCount }} 个账号；当前版本会等待上游 SSE 测试全部结束后一次性返回结果。</p>
+          <p v-if="batchTesting" class="muted">正在检测 {{ selectedAccountCount }} 个账号；每个账号完成后会更新一行结果。</p>
           <p v-if="batchTestError" class="error">{{ batchTestError }}</p>
           <p v-if="copyNotice" class="muted">{{ copyNotice }}</p>
           <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>
@@ -978,14 +982,15 @@ onMounted(refreshMe)
             </div>
             <div class="table-wrap">
               <table class="account-table">
-                <thead><tr><th>账号 ID</th><th>结果</th><th>HTTP</th><th>耗时</th><th>响应摘要</th></tr></thead>
+                <thead><tr><th>账号 ID</th><th>结果</th><th>模型</th><th>HTTP</th><th>耗时</th><th>摘要</th></tr></thead>
                 <tbody>
                   <tr v-for="result in batchTestResults" :key="String(result.id)">
                     <td>{{ result.id }}</td>
                     <td>{{ result.ok ? '成功' : '失败' }}</td>
+                    <td>{{ result.model || '未知' }}</td>
                     <td>{{ result.statusCode || '未知' }}</td>
                     <td>{{ result.durationMs ?? '未知' }} ms</td>
-                    <td><pre class="inline-json">{{ result.error || result.body || '无响应内容' }}</pre></td>
+                    <td><pre class="inline-json">{{ result.message || result.error || '无响应内容' }}</pre></td>
                   </tr>
                 </tbody>
               </table>

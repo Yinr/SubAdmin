@@ -388,16 +388,63 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 			"id":         accountID,
 			"statusCode": statusCode,
 			"durationMs": time.Since(started).Milliseconds(),
-			"ok":         err == nil && statusCode >= 200 && statusCode < 300,
 		}
 		if err != nil {
+			result["ok"] = false
 			result["error"] = err.Error()
 		} else {
+			ok, message, model := summarizeAccountTestSSE(string(sanitizeJSONForBrowser(data)))
+			result["ok"] = ok
+			result["message"] = message
+			if model != "" {
+				result["model"] = model
+			}
 			result["body"] = string(sanitizeJSONForBrowser(data))
 		}
 		results = append(results, result)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": results})
+}
+
+func summarizeAccountTestSSE(body string) (bool, string, string) {
+	ok := false
+	message := "未检测到完成事件"
+	model := ""
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		raw := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		var event struct {
+			Type    string `json:"type"`
+			Text    string `json:"text"`
+			Model   string `json:"model"`
+			Success bool   `json:"success"`
+			Error   string `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			continue
+		}
+		if event.Model != "" {
+			model = event.Model
+		}
+		switch event.Type {
+		case "error":
+			return false, event.Error, model
+		case "content":
+			if event.Text != "" {
+				message = event.Text
+			}
+		case "test_complete":
+			ok = event.Success
+			if ok {
+				return true, "测试成功", model
+			}
+			return false, "测试未成功完成", model
+		}
+	}
+	return ok, message, model
 }
 
 func shellPage() string {
