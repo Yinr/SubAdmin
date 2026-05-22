@@ -66,6 +66,12 @@ const accountFilters = reactive({
   sortOrder: 'asc',
 })
 
+const batchTestForm = reactive({
+  modelId: '',
+  prompt: '',
+  mode: '',
+})
+
 const scheduleQuickFilter = ref('all')
 const groupToAdd = ref('')
 const groupFilterStates = reactive<Record<string, GroupState>>({})
@@ -636,7 +642,10 @@ async function testSelectedAccounts() {
   }
   batchTesting.value = true
   try {
-    const payload = await api<{ items: Record<string, unknown>[] }>(`api/sites/${activeSiteId.value}/accounts`, { method: 'POST', body: JSON.stringify({ ids }) })
+    const payload = await api<{ items: Record<string, unknown>[] }>(`api/sites/${activeSiteId.value}/accounts`, {
+      method: 'POST',
+      body: JSON.stringify({ ids, ...batchTestForm }),
+    })
     batchTestResults.value = payload.items || []
   } catch (error) {
     batchTestError.value = error instanceof Error ? error.message : '批量检测失败'
@@ -911,10 +920,21 @@ onMounted(refreshMe)
             <button type="button" class="mini" @click="copyText(activeAccountFilters, '筛选条件')">复制</button>
           </p>
           <div class="batch-toolbar">
-            <span class="muted">已选择 {{ selectedAccountCount }} 个账号，批量检测会顺序调用上游单账号测试接口。</span>
+            <span class="muted">已选择 {{ selectedAccountCount }} 个账号，批量检测会顺序调用上游单账号测试接口，整批完成后显示结果。</span>
+            <label>测试模型<input v-model="batchTestForm.modelId" placeholder="留空使用 sub2api 默认测试模型" /></label>
+            <label>提示词<input v-model="batchTestForm.prompt" placeholder="留空使用上游默认测试提示" /></label>
+            <label>模式
+              <select v-model="batchTestForm.mode">
+                <option value="">默认</option>
+                <option value="chat">chat</option>
+                <option value="responses">responses</option>
+                <option value="image">image</option>
+              </select>
+            </label>
             <button class="secondary" :disabled="batchTesting || selectedAccountCount === 0" @click="testSelectedAccounts">{{ batchTesting ? '检测中...' : '检测选中账号' }}</button>
             <button class="secondary" :disabled="selectedAccountCount === 0" @click="clearAccountSelection">清空选择</button>
           </div>
+          <p v-if="batchTesting" class="muted">正在检测 {{ selectedAccountCount }} 个账号；当前版本会等待上游 SSE 测试全部结束后一次性返回结果。</p>
           <p v-if="batchTestError" class="error">{{ batchTestError }}</p>
           <p v-if="copyNotice" class="muted">{{ copyNotice }}</p>
           <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>

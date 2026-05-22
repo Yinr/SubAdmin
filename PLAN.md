@@ -87,10 +87,11 @@ Completed:
 - Reuse sub2api's existing single-account test endpoint for each account.
 - Keep a conservative batch limit of 20 accounts and sequential execution in the first version.
 - Show per-account test results with success/failure, status code, duration, and sanitized response text.
+- Batch test options include optional model id, prompt, and mode; empty model uses sub2api's default test model.
 
 Next:
 
-- Later, promote batch tests into persisted Jobs with retry and history.
+- Improve batch test feedback by streaming progress or promoting tests into persisted Jobs with retry and history.
 
 ## Phase 5: Import Preview Workflow
 

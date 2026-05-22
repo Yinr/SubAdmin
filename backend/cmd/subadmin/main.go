@@ -355,7 +355,10 @@ func writeSiteError(w http.ResponseWriter, err error) {
 
 func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
 	var input struct {
-		IDs []int64 `json:"ids"`
+		IDs     []int64 `json:"ids"`
+		ModelID string  `json:"modelId"`
+		Prompt  string  `json:"prompt"`
+		Mode    string  `json:"mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
@@ -376,7 +379,11 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 			continue
 		}
 		started := time.Now()
-		data, statusCode, err := siteService.AdminPOSTJSON(r.Context(), siteID, fmt.Sprintf("/api/v1/admin/accounts/%d/test", accountID), map[string]any{})
+		data, statusCode, err := siteService.AdminPOSTJSON(r.Context(), siteID, fmt.Sprintf("/api/v1/admin/accounts/%d/test", accountID), map[string]any{
+			"model_id": strings.TrimSpace(input.ModelID),
+			"prompt":   strings.TrimSpace(input.Prompt),
+			"mode":     strings.TrimSpace(input.Mode),
+		})
 		result := map[string]any{
 			"id":         accountID,
 			"statusCode": statusCode,
