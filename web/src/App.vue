@@ -57,6 +57,7 @@ const accountFilters = reactive({
 })
 
 const scheduleQuickFilter = ref('all')
+const groupToAdd = ref('')
 const groupFilterStates = reactive<Record<string, GroupState>>({})
 
 const accountPager = reactive({
@@ -94,6 +95,10 @@ const visibleAccounts = computed(() => {
     return matchesGroupFilters(account)
   })
 })
+
+const groupFilterItems = computed(() => groupOptions.value.filter((group) => groupState(group.id) !== 'any'))
+
+const addableGroupOptions = computed(() => groupOptions.value.filter((group) => groupState(group.id) === 'any'))
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
@@ -370,9 +375,16 @@ function groupState(id: string): GroupState {
 function setGroupState(id: string, state: GroupState) {
   if (state === 'any') {
     delete groupFilterStates[id]
+    if (!groupToAdd.value) groupToAdd.value = id
     return
   }
   groupFilterStates[id] = state
+}
+
+function addGroupFilter() {
+  if (!groupToAdd.value) return
+  groupFilterStates[groupToAdd.value] = 'include'
+  groupToAdd.value = addableGroupOptions.value.find((group) => group.id !== groupToAdd.value)?.id || ''
 }
 
 function matchesGroupFilters(account: Account) {
@@ -397,6 +409,7 @@ function activeGroupFilters() {
 
 function resetGroupFilters() {
   Object.keys(groupFilterStates).forEach((key) => delete groupFilterStates[key])
+  groupToAdd.value = ''
 }
 
 function accountProxy(account: Account) {
@@ -604,20 +617,28 @@ onMounted(refreshMe)
           <section class="group-filter">
             <div class="group-filter-head">
               <strong>分组三态筛选</strong>
-              <span class="muted">选中=必须包含，不选中=必须不包含，随意=忽略</span>
+              <span class="muted">未加入筛选列表的分组默认随意</span>
             </div>
             <p v-if="groupsLoading" class="muted">正在加载分组选项...</p>
-            <div class="group-options">
-              <div v-for="group in groupOptions" :key="group.id" class="group-option">
+            <div class="group-add-row">
+              <select v-model="groupToAdd" :disabled="!addableGroupOptions.length">
+                <option value="">选择分组加入筛选</option>
+                <option v-for="group in addableGroupOptions" :key="group.id" :value="group.id">{{ group.name }}</option>
+              </select>
+              <button type="button" class="secondary" :disabled="!groupToAdd" @click="addGroupFilter">加入</button>
+            </div>
+            <div class="group-options" v-if="groupFilterItems.length">
+              <div v-for="group in groupFilterItems" :key="group.id" class="group-option">
                 <span>{{ group.name }}</span>
                 <div class="segmented">
                   <button type="button" :class="{ active: groupState(group.id) === 'include' }" @click="setGroupState(group.id, 'include')">选中</button>
                   <button type="button" :class="{ active: groupState(group.id) === 'exclude' }" @click="setGroupState(group.id, 'exclude')">不选中</button>
-                  <button type="button" :class="{ active: groupState(group.id) === 'any' }" @click="setGroupState(group.id, 'any')">随意</button>
+                  <button type="button" @click="setGroupState(group.id, 'any')">移除</button>
                 </div>
               </div>
-              <p v-if="!groupOptions.length && !groupsLoading" class="muted">暂无分组选项；查询账号后也会从当前列表补充分组。</p>
             </div>
+            <p v-else-if="!groupsLoading" class="muted">暂无分组筛选；需要限制时先选择分组并加入。</p>
+            <p v-if="!groupOptions.length && !groupsLoading" class="muted">暂无分组选项；查询账号后也会从当前列表补充分组。</p>
           </section>
           <p v-if="accountError" class="error">{{ accountError }}</p>
           <p v-if="activeAccountFilters" class="muted">当前筛选：{{ activeAccountFilters }}</p>
@@ -732,6 +753,7 @@ h1, h2 { margin: 0; }
 .filter-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
 .group-filter { margin: 14px 0; padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(15, 23, 42, 0.46); }
 .group-filter-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; justify-content: space-between; }
+.group-add-row { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 10px; margin-top: 12px; align-items: center; }
 .group-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-top: 12px; }
 .group-option { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 10px; border: 1px solid rgba(148, 163, 184, 0.13); border-radius: 12px; background: rgba(2, 6, 23, 0.22); }
 .segmented { display: inline-flex; gap: 2px; padding: 3px; border-radius: 12px; background: rgba(2, 6, 23, 0.38); }
