@@ -837,7 +837,8 @@ function batchResultLabel(result: Record<string, unknown>) {
 function batchResultHint(result: Record<string, unknown>) {
   if (isBatchResultPending(result)) return '测试中'
   if (result.ok === true && !result.hint && !result.resetAt) return '正常'
-  return result.hint || result.resetAt || '无明确提示'
+  if (result.ok === false && !result.hint && !result.resetAt) return '异常'
+  return result.hint || result.resetAt || '异常'
 }
 
 function progressPercent(done: number, total: number) {
