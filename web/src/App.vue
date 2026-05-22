@@ -46,6 +46,11 @@ const accountFilters = reactive({
   search: '',
   platform: '',
   status: '',
+  type: '',
+  group: '',
+  privacyMode: '',
+  sortBy: 'name',
+  sortOrder: 'asc',
 })
 
 const accountPager = reactive({
@@ -193,6 +198,26 @@ function normalizeAccounts(payload: any): Account[] {
   return []
 }
 
+function filterQueryValue(key: string, value: string) {
+  if (!value.trim()) return ''
+  if (key === 'privacyMode') return value.trim()
+  return value.trim()
+}
+
+const activeAccountFilters = computed(() => {
+  const parts = [
+    accountFilters.search && `搜索: ${accountFilters.search}`,
+    accountFilters.platform && `平台: ${accountFilters.platform}`,
+    accountFilters.status && `状态: ${accountFilters.status}`,
+    accountFilters.type && `类型: ${accountFilters.type}`,
+    accountFilters.group && `分组: ${accountFilters.group}`,
+    accountFilters.privacyMode && `隐私: ${accountFilters.privacyMode}`,
+    accountFilters.sortBy !== 'name' && `排序: ${accountFilters.sortBy}`,
+    accountFilters.sortOrder !== 'asc' && `方向: ${accountFilters.sortOrder}`,
+  ].filter(Boolean)
+  return parts.join(' · ')
+})
+
 async function loadAccounts(options: { force?: boolean } = {}) {
   accountError.value = ''
   if (!activeSiteId.value) {
@@ -202,7 +227,13 @@ async function loadAccounts(options: { force?: boolean } = {}) {
   const requestSeq = ++accountRequestSeq
   const params = new URLSearchParams({ page: String(accountPager.page), page_size: String(accountPager.pageSize) })
   Object.entries(accountFilters).forEach(([key, value]) => {
-    if (value.trim()) params.set(key, value.trim())
+    const trimmed = filterQueryValue(key, value)
+    if (!trimmed) return
+    if (key === 'privacyMode') {
+      params.set('privacy_mode', trimmed)
+      return
+    }
+    params.set(key, trimmed)
   })
   const cacheKey = `${activeSiteId.value}?${params.toString()}`
   const cached = accountCache.get(cacheKey)
@@ -299,7 +330,7 @@ function openAccountDetail(account: Account) {
 }
 
 function clearAccountFilters() {
-  Object.assign(accountFilters, { search: '', platform: '', status: '' })
+  Object.assign(accountFilters, { search: '', platform: '', status: '', type: '', group: '', privacyMode: '', sortBy: 'name', sortOrder: 'asc' })
   accountPager.page = 1
   loadAccounts()
 }
@@ -381,6 +412,25 @@ onMounted(refreshMe)
             <label>搜索<input v-model="accountFilters.search" placeholder="名称、备注或标识" /></label>
             <label>平台<input v-model="accountFilters.platform" placeholder="openai / claude / gemini" /></label>
             <label>状态<input v-model="accountFilters.status" placeholder="active" /></label>
+            <label>类型<input v-model="accountFilters.type" placeholder="oauth / setup-token / apikey" /></label>
+            <label>分组<input v-model="accountFilters.group" placeholder="group id / ungrouped" /></label>
+            <label>隐私模式<input v-model="accountFilters.privacyMode" placeholder="training_off" /></label>
+            <label>排序字段
+              <select v-model="accountFilters.sortBy">
+                <option value="name">名称</option>
+                <option value="created_at">创建时间</option>
+                <option value="updated_at">更新时间</option>
+                <option value="last_used_at">最近使用</option>
+                <option value="priority">优先级</option>
+                <option value="rate_limited_at">限流时间</option>
+              </select>
+            </label>
+            <label>排序方向
+              <select v-model="accountFilters.sortOrder">
+                <option value="asc">升序</option>
+                <option value="desc">降序</option>
+              </select>
+            </label>
             <label>每页数量
               <select v-model.number="accountPager.pageSize" @change="changeAccountPageSize">
                 <option :value="10">10</option>
@@ -392,6 +442,7 @@ onMounted(refreshMe)
             <button type="button" class="secondary" :disabled="accountsLoading" @click="clearAccountFilters">清空筛选</button>
           </form>
           <p v-if="accountError" class="error">{{ accountError }}</p>
+          <p v-if="activeAccountFilters" class="muted">当前筛选：{{ activeAccountFilters }}</p>
           <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>
           <div class="table-wrap">
             <table class="account-table">

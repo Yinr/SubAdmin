@@ -42,7 +42,7 @@ Status:
 - Added a read-only account detail modal based on current list data, with client-side redaction for sensitive field names.
 - Account list proxy now redacts sensitive upstream fields before sending data to the browser.
 - Account table now shows groups, proxy/scheduling state, usage percentages, and last-used time.
-- Advanced filters are still pending.
+- Advanced read-only filters added for type, group, privacy mode, and sorting.
 
 ## Phase 3: Import Workflow
 - Accept uploads of sub2api-supported upstream account formats.
