@@ -137,6 +137,20 @@ const selectedAccountCount = computed(() => selectedAccountIds.value.size)
 
 const failedBatchTestIDs = computed(() => batchTestResults.value.filter((result) => !isBatchResultPending(result) && result.ok !== true).map((result) => Number(result.id)).filter((id) => Number.isFinite(id) && id > 0))
 
+const batchTestFailureGroups = computed(() => {
+  const groups = new Map<string, number[]>()
+  batchTestResults.value.forEach((result) => {
+    if (isBatchResultPending(result) || result.ok === true) return
+    const id = Number(result.id)
+    if (!Number.isFinite(id) || id <= 0) return
+    const hint = String(batchResultHint(result) || '异常')
+    groups.set(hint, [...(groups.get(hint) || []), id])
+  })
+  return Array.from(groups.entries())
+    .map(([hint, ids]) => ({ hint, ids, count: ids.length }))
+    .sort((a, b) => b.count - a.count || a.hint.localeCompare(b.hint, 'zh-CN'))
+})
+
 const filteredIDCacheHit = computed(() => filteredAccountIDsCache.has(currentFilteredIDsCacheKey()))
 
 const batchTestProgress = computed(() => progressPercent(batchTestDone.value, batchTestTotal.value))
@@ -861,6 +875,10 @@ function copyFailedBatchTestIDs() {
   copyText(failedBatchTestIDs.value.join('\n'), '失败账号 ID')
 }
 
+function copyBatchTestGroupIDs(group: { hint: string; ids: number[] }) {
+  copyText(group.ids.join('\n'), `${group.hint}账号 ID`)
+}
+
 async function copyText(value: unknown, label: string) {
   const text = String(value || '')
   if (!text) return
@@ -1183,6 +1201,10 @@ onMounted(refreshMe)
               </div>
             </div>
             <div class="progress-track"><div class="progress-bar" :style="{ width: `${batchTestProgress}%` }"></div></div>
+            <div v-if="batchTestFailureGroups.length" class="failure-groups">
+              <span class="muted">失败分类</span>
+              <button v-for="group in batchTestFailureGroups" :key="group.hint" class="mini" type="button" @click="copyBatchTestGroupIDs(group)">{{ group.hint }} {{ group.count }} 个</button>
+            </div>
             <div ref="batchTestScroll" class="result-scroll table-wrap">
               <table class="account-table result-table">
                 <thead><tr><th>账号 ID</th><th>结果</th><th>模型</th><th>HTTP</th><th>耗时</th><th>提示</th><th>摘要</th></tr></thead>
@@ -1413,6 +1435,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .batch-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 14px; background: rgba(2, 6, 23, 0.22); }
 .batch-results { display: grid; gap: 10px; margin-top: 14px; }
 .result-panel { padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(2, 6, 23, 0.24); }
+.failure-groups { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .result-scroll { max-height: 320px; overflow: auto; border-radius: 12px; border: 1px solid rgba(148, 163, 184, 0.12); }
 .refresh-result-scroll { padding: 12px; background: rgba(15, 23, 42, 0.28); }
 .result-table { min-width: 860px; }
