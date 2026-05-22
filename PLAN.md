@@ -92,6 +92,7 @@ Completed:
 - Batch test results now parse upstream SSE events to report success/error and tested model.
 - Frontend runs selected account tests one by one and updates each row as it completes.
 - Batch test result helpers added for copying failed account IDs and retrying failed items only.
+- Batch test result parser recognizes known rate-limit signals such as 429, usage_limit_reached, resets_at, retry_after, and rate_limit_reset_at.
 
 Next:
 

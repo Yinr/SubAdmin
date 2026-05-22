@@ -393,9 +393,15 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 			result["ok"] = false
 			result["error"] = err.Error()
 		} else {
-			ok, message, model := summarizeAccountTestSSE(string(sanitizeJSONForBrowser(data)))
+			ok, message, model, hint, resetAt := summarizeAccountTestSSE(string(sanitizeJSONForBrowser(data)))
 			result["ok"] = ok
 			result["message"] = message
+			if hint != "" {
+				result["hint"] = hint
+			}
+			if resetAt != "" {
+				result["resetAt"] = resetAt
+			}
 			if model != "" {
 				result["model"] = model
 			}
@@ -406,10 +412,12 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 	writeJSON(w, http.StatusOK, map[string]any{"items": results})
 }
 
-func summarizeAccountTestSSE(body string) (bool, string, string) {
+func summarizeAccountTestSSE(body string) (bool, string, string, string, string) {
 	ok := false
 	message := "未检测到完成事件"
 	model := ""
+	hint := ""
+	resetAt := ""
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data:") {
@@ -429,9 +437,24 @@ func summarizeAccountTestSSE(body string) (bool, string, string) {
 		if event.Model != "" {
 			model = event.Model
 		}
+		if event.Text != "" {
+			if parsedHint, parsedReset := parseKnownTestHint(event.Text); parsedHint != "" {
+				hint = parsedHint
+				resetAt = parsedReset
+			}
+		}
+		if event.Error != "" {
+			if parsedHint, parsedReset := parseKnownTestHint(event.Error); parsedHint != "" {
+				hint = parsedHint
+				resetAt = parsedReset
+			}
+		}
 		switch event.Type {
 		case "error":
-			return false, event.Error, model
+			if hint != "" {
+				return false, event.Error, model, hint, resetAt
+			}
+			return false, event.Error, model, "", ""
 		case "content":
 			if event.Text != "" {
 				message = event.Text
@@ -439,12 +462,57 @@ func summarizeAccountTestSSE(body string) (bool, string, string) {
 		case "test_complete":
 			ok = event.Success
 			if ok {
-				return true, "测试成功", model
+				return true, "测试成功", model, hint, resetAt
 			}
-			return false, "测试未成功完成", model
+			return false, "测试未成功完成", model, hint, resetAt
 		}
 	}
-	return ok, message, model
+	if hint == "" {
+		hint, resetAt = parseKnownTestHint(body)
+	}
+	return ok, message, model, hint, resetAt
+}
+
+func parseKnownTestHint(text string) (string, string) {
+	lower := strings.ToLower(text)
+	if !strings.Contains(lower, "429") && !strings.Contains(lower, "rate_limit") && !strings.Contains(lower, "rate limit") && !strings.Contains(lower, "usage_limit_reached") {
+		return "", ""
+	}
+	resetAt := firstKnownTimeValue(text, "resets_at", "reset_at", "rate_limit_reset_at")
+	if resetAt != "" {
+		return "限流，恢复时间: " + resetAt, resetAt
+	}
+	retryAfter := firstKnownTimeValue(text, "retry_after", "resets_in_seconds", "reset_after_seconds")
+	if retryAfter != "" {
+		return "限流，建议等待: " + retryAfter + " 秒", ""
+	}
+	return "限流或额度耗尽", ""
+}
+
+func firstKnownTimeValue(text string, keys ...string) string {
+	for _, key := range keys {
+		marker := `"` + key + `"`
+		idx := strings.Index(text, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := text[idx+len(marker):]
+		colon := strings.Index(rest, ":")
+		if colon < 0 {
+			continue
+		}
+		value := strings.TrimSpace(rest[colon+1:])
+		value = strings.TrimLeft(value, `"`)
+		end := strings.IndexAny(value, `",}\n `)
+		if end >= 0 {
+			value = value[:end]
+		}
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func shellPage() string {

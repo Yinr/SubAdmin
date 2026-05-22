@@ -1012,7 +1012,7 @@ onMounted(refreshMe)
             </div>
             <div class="table-wrap">
               <table class="account-table">
-                <thead><tr><th>账号 ID</th><th>结果</th><th>模型</th><th>HTTP</th><th>耗时</th><th>摘要</th></tr></thead>
+                <thead><tr><th>账号 ID</th><th>结果</th><th>模型</th><th>HTTP</th><th>耗时</th><th>提示</th><th>摘要</th></tr></thead>
                 <tbody>
                   <tr v-for="result in batchTestResults" :key="String(result.id)">
                     <td>{{ result.id }}</td>
@@ -1020,6 +1020,7 @@ onMounted(refreshMe)
                     <td>{{ result.model || '未知' }}</td>
                     <td>{{ result.statusCode || '未知' }}</td>
                     <td>{{ result.durationMs ?? '未知' }} ms</td>
+                    <td>{{ result.hint || result.resetAt || '无明确提示' }}</td>
                     <td><pre class="inline-json">{{ result.message || result.error || '无响应内容' }}</pre></td>
                   </tr>
                 </tbody>
