@@ -45,6 +45,7 @@ const groupsLoading = ref(false)
 const savingSite = ref(false)
 const docsLoading = ref(false)
 const batchTesting = ref(false)
+const batchCollecting = ref(false)
 const activeView = ref<ViewMode>('accounts')
 
 const siteForm = reactive({
@@ -346,6 +347,28 @@ function filterQueryValue(key: string, value: string) {
   return value.trim()
 }
 
+function buildAccountQuery(page: number, pageSize: number) {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  Object.entries(accountFilters).forEach(([key, value]) => {
+    const trimmed = filterQueryValue(key, value)
+    if (!trimmed) return
+    if (key === 'privacyMode') {
+      params.set('privacy_mode', trimmed)
+      return
+    }
+    if (key === 'upstreamGroup') {
+      params.set('group', trimmed)
+      return
+    }
+    params.set(key, trimmed)
+  })
+  return params
+}
+
+function payloadTotal(payload: any) {
+  return Number(payload.total || payload.data?.total || 0)
+}
+
 const activeAccountFilters = computed(() => {
   const parts = [
     accountFilters.search && `搜索: ${accountFilters.search}`,
@@ -369,25 +392,12 @@ async function loadAccounts(options: { force?: boolean } = {}) {
     return
   }
   const requestSeq = ++accountRequestSeq
-  const params = new URLSearchParams({ page: String(accountPager.page), page_size: String(accountPager.pageSize) })
-  Object.entries(accountFilters).forEach(([key, value]) => {
-    const trimmed = filterQueryValue(key, value)
-    if (!trimmed) return
-    if (key === 'privacyMode') {
-      params.set('privacy_mode', trimmed)
-      return
-    }
-    if (key === 'upstreamGroup') {
-      params.set('group', trimmed)
-      return
-    }
-    params.set(key, trimmed)
-  })
+  const params = buildAccountQuery(accountPager.page, accountPager.pageSize)
   const cacheKey = `${activeSiteId.value}?${params.toString()}`
   const cached = accountCache.get(cacheKey)
   if (!options.force && cached && cached.expiresAt > Date.now()) {
     accounts.value = normalizeAccounts(cached.payload)
-    accountPager.total = Number(cached.payload.total || cached.payload.data?.total || 0)
+    accountPager.total = payloadTotal(cached.payload)
     accountPager.loaded = true
     return
   }
@@ -397,7 +407,7 @@ async function loadAccounts(options: { force?: boolean } = {}) {
     if (requestSeq !== accountRequestSeq) return
     accountCache.set(cacheKey, { expiresAt: Date.now() + 8000, payload })
     accounts.value = normalizeAccounts(payload)
-    accountPager.total = Number(payload.total || payload.data?.total || 0)
+    accountPager.total = payloadTotal(payload)
     accountPager.loaded = true
   } catch (error) {
     if (requestSeq !== accountRequestSeq) return
@@ -458,6 +468,46 @@ function toggleAllVisibleAccounts() {
     })
   }
   selectedAccountIds.value = next
+}
+
+async function selectAllFilteredAccounts() {
+  batchTestError.value = ''
+  if (!activeSiteId.value) {
+    batchTestError.value = '请先选择站点'
+    return []
+  }
+  batchCollecting.value = true
+  const ids = new Set<string>()
+  const pageSize = 100
+  let page = 1
+  try {
+    while (true) {
+      const params = buildAccountQuery(page, pageSize)
+      const payload = await api<any>(`api/sites/${activeSiteId.value}/accounts?${params.toString()}`)
+      const pageAccounts = normalizeAccounts(payload)
+      pageAccounts.filter(matchesLocalAccountFilters).forEach((account) => {
+        const id = accountID(account)
+        if (id) ids.add(id)
+      })
+      const total = payloadTotal(payload)
+      if (!pageAccounts.length) break
+      if (total && page * pageSize >= total) break
+      if (!total && pageAccounts.length < pageSize) break
+      page += 1
+    }
+    selectedAccountIds.value = ids
+    return Array.from(ids).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+  } catch (error) {
+    batchTestError.value = error instanceof Error ? error.message : '收集筛选账号失败'
+    return []
+  } finally {
+    batchCollecting.value = false
+  }
+}
+
+function matchesLocalAccountFilters(account: Account) {
+  if (scheduleQuickFilter.value !== 'all' && accountScheduleKey(account) !== scheduleQuickFilter.value) return false
+  return matchesGroupFilters(account)
 }
 
 function clearAccountSelection() {
@@ -645,6 +695,17 @@ async function testSelectedAccounts() {
     return
   }
   const ids = Array.from(selectedAccountIds.value).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+  await testAccountIDs(ids)
+}
+
+async function testAllFilteredAccounts() {
+  batchTestError.value = ''
+  batchTestResults.value = []
+  const ids = await selectAllFilteredAccounts()
+  await testAccountIDs(ids)
+}
+
+async function testAccountIDs(ids: number[]) {
   if (!ids.length) {
     batchTestError.value = '请先选择账号'
     return
@@ -996,8 +1057,10 @@ onMounted(refreshMe)
             <label>随机抖动(ms)<input v-model.number="batchTestForm.jitterMs" type="number" min="0" step="100" /></label>
             <label class="inline-check"><input v-model="batchTestForm.logResponses" type="checkbox" /> 临时记录响应日志</label>
             <button class="secondary" :disabled="batchTesting || selectedAccountCount === 0" @click="testSelectedAccounts">{{ batchTesting ? '检测中...' : '检测选中账号' }}</button>
+            <button class="secondary" :disabled="batchTesting || batchCollecting || !activeSiteId" @click="testAllFilteredAccounts">{{ batchCollecting ? '收集中...' : '检测当前筛选全部' }}</button>
             <button class="secondary" :disabled="selectedAccountCount === 0" @click="clearAccountSelection">一键取消选择</button>
           </div>
+          <p v-if="batchCollecting" class="muted">正在按当前筛选条件分页收集账号 ID...</p>
           <p v-if="batchTesting" class="muted">正在检测 {{ selectedAccountCount }} 个账号；每个账号完成后会更新一行结果。大批量会自动提高最小间隔。</p>
           <p v-if="batchTestError" class="error">{{ batchTestError }}</p>
           <p v-if="copyNotice" class="muted">{{ copyNotice }}</p>
