@@ -100,6 +100,7 @@ Completed:
 - Batch token refresh proxies sub2api `/api/v1/admin/accounts/batch-refresh` for selected or filtered accounts with explicit confirmation.
 - Batch operation panels now appear before the account table with progress bars, bounded scroll areas, auto-scroll, and cached filtered ID sets.
 - Temporary sanitized batch test response logs can be written to `/tmp/subadmin-batch-tests/` for parser analysis.
+- Add a status statistics page to show active users, their concurrent connections, active upstream accounts with concurrency, and recent usage summaries with 1/5/10/30 minute and 1 hour windows.
 
 Next:
 

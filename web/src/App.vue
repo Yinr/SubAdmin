@@ -457,9 +457,15 @@ async function loadAccounts(options: { force?: boolean } = {}) {
   }
 }
 
+function reloadAccountsFromUpstream() {
+  accountCache.clear()
+  filteredAccountIDsCache.clear()
+  loadAccounts({ force: true })
+}
+
 function submitAccountFilters() {
   accountPager.page = 1
-  loadAccounts()
+  reloadAccountsFromUpstream()
 }
 
 function changeAccountPageSize() {
@@ -1033,7 +1039,7 @@ onMounted(refreshMe)
         <section class="panel content-panel">
           <div class="panel-head">
             <h2>上游账号</h2>
-            <button class="secondary" :disabled="accountsLoading" @click="loadAccounts({ force: true })">刷新</button>
+            <button class="secondary" :disabled="accountsLoading" @click="reloadAccountsFromUpstream">刷新</button>
           </div>
           <div class="filter-note">
             <strong>上游查询筛选</strong>
