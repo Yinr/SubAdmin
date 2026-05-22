@@ -91,11 +91,11 @@ Completed:
 - Batch test options include optional model id, prompt, and mode; empty model uses sub2api's default test model.
 - Batch test results now parse upstream SSE events to report success/error and tested model.
 - Frontend runs selected account tests one by one and updates each row as it completes.
+- Batch test result helpers added for copying failed account IDs and retrying failed items only.
 
 Next:
 
 - Promote batch tests into persisted Jobs with retry and history.
-- Add retry-failed and copy-failed-account-ids helpers for batch test results.
 
 ## Phase 5: Import Preview Workflow
 
@@ -160,4 +160,4 @@ Status: ongoing.
 
 ## Immediate Next Step
 
-Improve account filtering by adding upstream single-group filtering while keeping local tri-state group filtering for current-page refinement.
+Promote batch account tests into persisted Jobs with retry and history.

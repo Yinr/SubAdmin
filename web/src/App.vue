@@ -121,6 +121,8 @@ const upstreamGroupOptions = computed(() => [{ id: 'ungrouped', name: '未分组
 
 const selectedAccountCount = computed(() => selectedAccountIds.value.size)
 
+const failedBatchTestIDs = computed(() => batchTestResults.value.filter((result) => result.ok !== true && result.message !== '检测中...').map((result) => Number(result.id)).filter((id) => Number.isFinite(id) && id > 0))
+
 const allVisibleSelected = computed(() => visibleAccounts.value.length > 0 && visibleAccounts.value.every((account) => selectedAccountIds.value.has(accountID(account))))
 
 const activeSite = computed(() => sites.value.find((site) => site.id === activeSiteId.value) || null)
@@ -666,6 +668,16 @@ async function testSelectedAccounts() {
   }
 }
 
+async function retryFailedBatchTests() {
+  if (!failedBatchTestIDs.value.length) return
+  selectedAccountIds.value = new Set(failedBatchTestIDs.value.map((id) => String(id)))
+  await testSelectedAccounts()
+}
+
+function copyFailedBatchTestIDs() {
+  copyText(failedBatchTestIDs.value.join('\n'), '失败账号 ID')
+}
+
 async function copyText(value: unknown, label: string) {
   const text = String(value || '')
   if (!text) return
@@ -992,7 +1004,11 @@ onMounted(refreshMe)
           <section v-if="batchTestResults.length" class="batch-results">
             <div class="panel-head">
               <h2>批量检测结果</h2>
-              <button class="secondary" @click="copyText(JSON.stringify(batchTestResults, null, 2), '检测结果')">复制结果</button>
+              <div class="actions compact-actions">
+                <button class="secondary" @click="copyText(JSON.stringify(batchTestResults, null, 2), '检测结果')">复制结果</button>
+                <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="copyFailedBatchTestIDs">复制失败账号 ID</button>
+                <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="retryFailedBatchTests">只重试失败项</button>
+              </div>
             </div>
             <div class="table-wrap">
               <table class="account-table">
