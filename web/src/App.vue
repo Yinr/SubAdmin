@@ -16,6 +16,7 @@ type Site = {
 type Account = Record<string, unknown>
 type Group = Record<string, unknown>
 type GroupState = 'any' | 'include' | 'exclude'
+type ViewMode = 'accounts' | 'docs'
 
 const authed = ref(false)
 const expiresAt = ref('')
@@ -25,6 +26,8 @@ const sites = ref<Site[]>([])
 const siteError = ref('')
 const accountError = ref('')
 const copyNotice = ref('')
+const docsError = ref('')
+const aiReference = ref('')
 const accounts = ref<Account[]>([])
 const groups = ref<Group[]>([])
 const activeSiteId = ref<number | null>(null)
@@ -37,6 +40,8 @@ const sitesLoading = ref(false)
 const accountsLoading = ref(false)
 const groupsLoading = ref(false)
 const savingSite = ref(false)
+const docsLoading = ref(false)
+const activeView = ref<ViewMode>('accounts')
 
 const siteForm = reactive({
   name: '',
@@ -149,6 +154,12 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   return data as T
 }
 
+async function textResource(path: string): Promise<string> {
+  const res = await fetch(path, { credentials: 'same-origin' })
+  if (!res.ok) throw new Error('加载失败')
+  return res.text()
+}
+
 async function refreshMe() {
   const data = await api<{ authenticated: boolean; expiresAt?: string }>('api/auth/me')
   authed.value = data.authenticated
@@ -177,6 +188,21 @@ async function logout() {
   accounts.value = []
   activeSiteId.value = null
   accountPager.loaded = false
+  activeView.value = 'accounts'
+}
+
+async function showDocs() {
+  activeView.value = 'docs'
+  if (aiReference.value || docsLoading.value) return
+  docsError.value = ''
+  docsLoading.value = true
+  try {
+    aiReference.value = await textResource('docs/AI_REFERENCE.md')
+  } catch (error) {
+    docsError.value = error instanceof Error ? error.message : '加载文档失败'
+  } finally {
+    docsLoading.value = false
+  }
 }
 
 async function loadSites() {
@@ -591,10 +617,14 @@ onMounted(refreshMe)
           <h1>管理控制台</h1>
           <p class="muted">会话过期时间：{{ expiresAt || '未知' }}</p>
         </div>
-        <button class="secondary" @click="logout">退出登录</button>
+        <div class="topbar-actions">
+          <button :class="activeView === 'accounts' ? '' : 'secondary'" @click="activeView = 'accounts'">账号</button>
+          <button :class="activeView === 'docs' ? '' : 'secondary'" @click="showDocs">文档</button>
+          <button class="secondary" @click="logout">退出登录</button>
+        </div>
       </header>
 
-      <section class="overview-grid">
+      <section v-if="activeView === 'accounts'" class="overview-grid">
         <article class="overview-card">
           <span>站点</span>
           <strong>{{ dashboardStats.enabledSites }} / {{ dashboardStats.sites }}</strong>
@@ -637,7 +667,32 @@ onMounted(refreshMe)
         </article>
       </section>
 
-      <div class="layout-grid">
+      <section v-else class="panel docs-panel">
+        <div class="panel-head">
+          <div>
+            <h2>API 文档</h2>
+            <p class="muted">这些文档通过 SubAdmin 登录态保护。不会自动注入 sub2api 管理员 Key。</p>
+          </div>
+          <button class="secondary" :disabled="docsLoading" @click="showDocs">{{ docsLoading ? '加载中...' : '刷新 AI Reference' }}</button>
+        </div>
+        <div class="docs-links">
+          <a class="button-link secondary" href="docs/" target="_blank" rel="noreferrer">打开 Swagger UI</a>
+          <a class="button-link secondary" href="docs/openapi.yaml" target="_blank" rel="noreferrer">查看 OpenAPI YAML</a>
+          <a class="button-link secondary" href="docs/AI_REFERENCE.md" target="_blank" rel="noreferrer">打开原始 AI Reference</a>
+        </div>
+        <p class="muted">Swagger UI 的 Try it out 仍需你手动填写上游管理员 Key；SubAdmin 不会把已保存站点 Key 注入浏览器。</p>
+        <p v-if="docsError" class="error">{{ docsError }}</p>
+        <p v-if="docsLoading" class="muted">正在加载 AI Reference...</p>
+        <section class="docs-reader" v-if="aiReference">
+          <div class="panel-head">
+            <h2>AI Reference</h2>
+            <button class="secondary" @click="copyText(aiReference, 'AI Reference')">复制全文</button>
+          </div>
+          <pre>{{ aiReference }}</pre>
+        </section>
+      </section>
+
+      <div v-if="activeView === 'accounts'" class="layout-grid">
         <aside class="panel">
           <div class="panel-head">
             <h2>站点</h2>
@@ -927,6 +982,7 @@ onMounted(refreshMe)
 .login-card { width: min(520px, 100%); margin: 12vh auto; padding: 28px; }
 .dashboard { display: grid; gap: 18px; }
 .topbar { display: flex; justify-content: space-between; gap: 18px; align-items: center; padding: 22px; }
+.topbar-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
 .overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
 .overview-card { padding: 16px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 18px; background: rgba(15, 23, 42, 0.7); }
 .overview-card.wide { grid-column: span 2; }
@@ -936,6 +992,10 @@ onMounted(refreshMe)
 .layout-grid { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 18px; align-items: start; }
 .panel { padding: 18px; }
 .content-panel { min-height: 520px; }
+.docs-panel { display: grid; gap: 14px; }
+.docs-links { display: flex; flex-wrap: wrap; gap: 10px; }
+.docs-reader { display: grid; gap: 12px; margin-top: 8px; }
+.docs-reader pre { margin: 0; max-height: 620px; overflow: auto; padding: 16px; border-radius: 14px; background: rgba(2, 6, 23, 0.55); color: #dbeafe; line-height: 1.55; white-space: pre-wrap; }
 .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
 .eyebrow { margin: 0 0 8px; color: #c4b5fd; letter-spacing: 0.16em; text-transform: uppercase; font-size: 12px; }
 h1, h2 { margin: 0; }

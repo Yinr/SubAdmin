@@ -64,17 +64,17 @@ Completed:
 - Copy helpers added for account ID, account name, and active filter summary.
 
 Next:
-- Continue protected docs polish.
+- Import preview workflow.
 
 ## Phase 3: Protected Docs Integration
 
-Status: in progress.
+Status: complete for current scope.
 
 - Protected `/docs/` route added for existing Swagger UI assets.
 - Frontend overview card links to Swagger UI, OpenAPI YAML, and AI Reference.
-- Add a richer logged-in docs page in the SubAdmin UI.
-- Add a protected view for `docs/AI_REFERENCE.md`.
-- Remove the need for a separate docs deployment.
+- Logged-in docs page added inside the SubAdmin UI.
+- AI Reference is fetched through the protected docs route and rendered in-app.
+- Separate docs deployment is no longer required for current bundled docs.
 
 ## Phase 4: Import Preview Workflow
 
@@ -139,4 +139,4 @@ Status: ongoing.
 
 ## Immediate Next Step
 
-Polish protected docs integration with an in-app docs page and clearer AI Reference rendering.
+Start Phase 4 import preview workflow. Keep it preview-only and do not call upstream write APIs.
