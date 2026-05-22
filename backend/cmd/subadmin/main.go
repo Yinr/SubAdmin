@@ -525,8 +525,11 @@ func summarizeAccountTestSSE(body string) (bool, string, string, string, string)
 
 func parseKnownTestHint(text string) (string, string) {
 	lower := strings.ToLower(text)
-	if strings.Contains(lower, "token_revoked") || strings.Contains(lower, "token_invalidated") || strings.Contains(lower, "invalidated oauth token") {
-		return "令牌已失效，需要重新授权", ""
+	if strings.Contains(lower, "token_revoked") {
+		return "令牌撤销", ""
+	}
+	if strings.Contains(lower, "token_invalidated") || strings.Contains(lower, "invalidated oauth token") {
+		return "令牌失效", ""
 	}
 	if !strings.Contains(lower, "429") && !strings.Contains(lower, "rate_limit") && !strings.Contains(lower, "rate limit") && !strings.Contains(lower, "usage_limit_reached") {
 		return "", ""
