@@ -29,9 +29,11 @@ const copyNotice = ref('')
 const docsError = ref('')
 const aiReference = ref('')
 const batchTestError = ref('')
+const batchRefreshError = ref('')
 const accounts = ref<Account[]>([])
 const groups = ref<Group[]>([])
 const batchTestResults = ref<Record<string, unknown>[]>([])
+const batchRefreshResult = ref<Record<string, unknown> | null>(null)
 const selectedAccountIds = ref<Set<string>>(new Set())
 const activeSiteId = ref<number | null>(null)
 const editingSite = ref<Site | null>(null)
@@ -45,6 +47,7 @@ const groupsLoading = ref(false)
 const savingSite = ref(false)
 const docsLoading = ref(false)
 const batchTesting = ref(false)
+const batchRefreshing = ref(false)
 const batchCollecting = ref(false)
 const activeView = ref<ViewMode>('accounts')
 
@@ -698,6 +701,46 @@ async function testSelectedAccounts() {
   await testAccountIDs(ids)
 }
 
+async function refreshSelectedAccountTokens() {
+  batchRefreshError.value = ''
+  batchRefreshResult.value = null
+  if (!activeSiteId.value) {
+    batchRefreshError.value = '请先选择站点'
+    return
+  }
+  const ids = Array.from(selectedAccountIds.value).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+  await refreshAccountTokenIDs(ids)
+}
+
+async function refreshAllFilteredAccountTokens() {
+  batchRefreshError.value = ''
+  batchRefreshResult.value = null
+  const ids = await selectAllFilteredAccounts()
+  await refreshAccountTokenIDs(ids)
+}
+
+async function refreshAccountTokenIDs(ids: number[]) {
+  if (!ids.length) {
+    batchRefreshError.value = '请先选择账号'
+    return
+  }
+  const ok = window.confirm(`将刷新 ${ids.length} 个账号的 OAuth 令牌，这会修改上游账号凭证。确认继续？`)
+  if (!ok) return
+  batchRefreshing.value = true
+  try {
+    const payload = await api<Record<string, unknown>>(`api/sites/${activeSiteId.value}/accounts/refresh`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    })
+    batchRefreshResult.value = payload
+    await loadAccounts({ force: true })
+  } catch (error) {
+    batchRefreshError.value = error instanceof Error ? error.message : '批量刷新令牌失败'
+  } finally {
+    batchRefreshing.value = false
+  }
+}
+
 async function testAllFilteredAccounts() {
   batchTestError.value = ''
   batchTestResults.value = []
@@ -1058,11 +1101,15 @@ onMounted(refreshMe)
             <label class="inline-check"><input v-model="batchTestForm.logResponses" type="checkbox" /> 临时记录响应日志</label>
             <button class="secondary" :disabled="batchTesting || selectedAccountCount === 0" @click="testSelectedAccounts">{{ batchTesting ? '检测中...' : '检测选中账号' }}</button>
             <button class="secondary" :disabled="batchTesting || batchCollecting || !activeSiteId" @click="testAllFilteredAccounts">{{ batchCollecting ? '收集中...' : '检测当前筛选全部' }}</button>
+            <button class="secondary" :disabled="batchRefreshing || selectedAccountCount === 0" @click="refreshSelectedAccountTokens">{{ batchRefreshing ? '刷新中...' : '刷新选中令牌' }}</button>
+            <button class="secondary" :disabled="batchRefreshing || batchCollecting || !activeSiteId" @click="refreshAllFilteredAccountTokens">{{ batchCollecting ? '收集中...' : '刷新当前筛选全部令牌' }}</button>
             <button class="secondary" :disabled="selectedAccountCount === 0" @click="clearAccountSelection">一键取消选择</button>
           </div>
           <p v-if="batchCollecting" class="muted">正在按当前筛选条件分页收集账号 ID...</p>
           <p v-if="batchTesting" class="muted">正在检测 {{ selectedAccountCount }} 个账号；每个账号完成后会更新一行结果。大批量会自动提高最小间隔。</p>
+          <p v-if="batchRefreshing" class="muted">正在刷新账号 OAuth 令牌；sub2api 批量刷新接口会修改上游账号凭证。</p>
           <p v-if="batchTestError" class="error">{{ batchTestError }}</p>
+          <p v-if="batchRefreshError" class="error">{{ batchRefreshError }}</p>
           <p v-if="copyNotice" class="muted">{{ copyNotice }}</p>
           <p v-if="accountsLoading" class="muted">正在加载账号列表...</p>
           <div class="table-wrap">
@@ -1123,6 +1170,20 @@ onMounted(refreshMe)
                 </tbody>
               </table>
             </div>
+          </section>
+          <section v-if="batchRefreshResult" class="batch-results">
+            <div class="panel-head">
+              <h2>批量刷新令牌结果</h2>
+              <div class="actions compact-actions">
+                <button class="secondary" @click="copyText(JSON.stringify(batchRefreshResult, null, 2), '刷新令牌结果')">复制结果</button>
+              </div>
+            </div>
+            <div class="result-grid">
+              <div><span class="muted">总数</span><strong>{{ batchRefreshResult.total ?? '未知' }}</strong></div>
+              <div><span class="muted">成功</span><strong>{{ batchRefreshResult.success ?? '未知' }}</strong></div>
+              <div><span class="muted">失败</span><strong>{{ batchRefreshResult.failed ?? '未知' }}</strong></div>
+            </div>
+            <pre class="inline-json">{{ JSON.stringify(batchRefreshResult.errors || batchRefreshResult.warnings || batchRefreshResult, null, 2) }}</pre>
           </section>
           <p v-if="accountPager.loaded && visibleAccounts.length !== accounts.length" class="muted">当前页本地筛选命中 {{ visibleAccounts.length }} / {{ accounts.length }} 条。</p>
           <div class="pager">
@@ -1281,6 +1342,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .filter-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .batch-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 14px; background: rgba(2, 6, 23, 0.22); }
 .batch-results { display: grid; gap: 10px; margin-top: 14px; }
+.result-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.result-grid div { display: grid; gap: 4px; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 12px; background: rgba(15, 23, 42, 0.45); }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .table-wrap { overflow-x: auto; margin-top: 12px; }
 .account-table { width: 100%; min-width: 720px; border-collapse: collapse; }

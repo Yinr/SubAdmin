@@ -183,6 +183,14 @@ func main() {
 			_, _ = w.Write(data)
 			return
 		}
+		if action == "accounts/refresh" {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeBatchAccountRefresh(w, r, siteService, id)
+			return
+		}
 		if action == "groups" {
 			if r.Method != http.MethodGet {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -419,6 +427,39 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 		results = append(results, result)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": results})
+}
+
+func writeBatchAccountRefresh(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
+	var input struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	ids := make([]int64, 0, len(input.IDs))
+	seen := make(map[int64]bool, len(input.IDs))
+	for _, id := range input.IDs {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		writeError(w, http.StatusBadRequest, "ids is required")
+		return
+	}
+	data, statusCode, err := siteService.AdminPOSTJSON(r.Context(), siteID, "/api/v1/admin/accounts/batch-refresh", map[string]any{
+		"account_ids": ids,
+	})
+	if err != nil {
+		writeSiteError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_, _ = w.Write(sanitizeJSONForBrowser(data))
 }
 
 func summarizeAccountTestSSE(body string) (bool, string, string, string, string) {
