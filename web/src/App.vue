@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 
 type Site = {
   id: number
@@ -58,7 +58,14 @@ const batchTestDone = ref(0)
 const batchRefreshTotal = ref(0)
 const batchRefreshDone = ref(0)
 const accountPageJump = ref('')
+const accountQueryElapsedSeconds = ref(0)
+const accountQuerySlow = ref(false)
+const groupPopoverAccount = ref<Account | null>(null)
+const groupPopoverPosition = reactive({ top: 0, left: 0 })
 const filteredAccountIDsCache = new Map<string, number[]>()
+const accountAbortController = ref<AbortController | null>(null)
+let accountQueryTimer: number | null = null
+let accountQueryCancelled = false
 
 const siteForm = reactive({
   name: '',
@@ -527,9 +534,20 @@ async function loadAccounts(options: { force?: boolean } = {}) {
     accountPager.loaded = true
     return
   }
+  stopAccountQueryTimer()
+  accountAbortController.value?.abort()
+  accountQueryCancelled = false
+  accountQueryElapsedSeconds.value = 0
+  accountQuerySlow.value = false
+  const controller = new AbortController()
+  accountAbortController.value = controller
+  accountQueryTimer = window.setInterval(() => {
+    accountQueryElapsedSeconds.value += 1
+    if (accountQueryElapsedSeconds.value >= 5) accountQuerySlow.value = true
+  }, 1000)
   accountsLoading.value = true
   try {
-    const payload = await api<any>(`api/sites/${activeSiteId.value}/accounts?${params.toString()}`)
+    const payload = await api<any>(`api/sites/${activeSiteId.value}/accounts?${params.toString()}`, { signal: controller.signal })
     if (requestSeq !== accountRequestSeq) return
     accountCache.set(cacheKey, { expiresAt: Date.now() + 8000, payload })
     accounts.value = normalizeAccounts(payload)
@@ -537,10 +555,32 @@ async function loadAccounts(options: { force?: boolean } = {}) {
     accountPager.loaded = true
   } catch (error) {
     if (requestSeq !== accountRequestSeq) return
+    if (accountQueryCancelled) {
+      accountError.value = '已取消本次账号查询'
+      return
+    }
     accountError.value = error instanceof Error ? error.message : '查询账号失败'
   } finally {
-    if (requestSeq === accountRequestSeq) accountsLoading.value = false
+    if (requestSeq === accountRequestSeq) {
+      accountsLoading.value = false
+      accountAbortController.value = null
+      accountQuerySlow.value = false
+      stopAccountQueryTimer()
+    }
   }
+}
+
+function stopAccountQueryTimer() {
+  if (accountQueryTimer !== null) {
+    window.clearInterval(accountQueryTimer)
+    accountQueryTimer = null
+  }
+}
+
+function cancelAccountQuery() {
+  if (!accountsLoading.value) return
+  accountQueryCancelled = true
+  accountAbortController.value?.abort()
 }
 
 function reloadAccountsFromUpstream() {
@@ -701,6 +741,38 @@ function accountGroupPreview(account: Account) {
     items: groups.slice(0, 2),
     extra: Math.max(0, groups.length - 2),
   }
+}
+
+function groupPopoverKey(account: Account) {
+  return accountID(account) || accountName(account)
+}
+
+function toggleFloatingGroupPopover(account: Account, event: MouseEvent) {
+  const key = groupPopoverKey(account)
+  if (groupPopoverAccount.value && groupPopoverKey(groupPopoverAccount.value) === key) {
+    closeGroupPopover()
+    return
+  }
+  const target = event.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  groupPopoverPosition.top = rect.bottom + window.scrollY + 8
+  groupPopoverPosition.left = Math.max(12, Math.min(rect.left + window.scrollX, window.scrollX + window.innerWidth - 400))
+  groupPopoverAccount.value = account
+}
+
+function closeGroupPopover() {
+  groupPopoverAccount.value = null
+}
+
+function addIncludeGroupFilter(id: string) {
+  setGroupState(id, 'include')
+}
+
+function handleDocumentClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null
+  if (!target) return
+  if (target.closest('.floating-group-popover') || target.closest('.group-preview-wrap')) return
+  closeGroupPopover()
 }
 
 function accountGroupEntries(account: Account) {
@@ -1103,6 +1175,14 @@ watch(batchRefreshResult, async () => {
 })
 
 onMounted(refreshMe)
+onMounted(() => {
+  document.addEventListener('click', handleDocumentClick, true)
+})
+onUnmounted(() => {
+  stopAccountQueryTimer()
+  accountAbortController.value?.abort()
+  document.removeEventListener('click', handleDocumentClick, true)
+})
 </script>
 
 <template>
@@ -1162,16 +1242,6 @@ onMounted(refreshMe)
           <span>平台分布</span>
           <strong>{{ dashboardStats.platforms }}</strong>
           <p class="muted">基于当前已加载账号结果统计</p>
-        </article>
-        <article class="overview-card wide">
-          <span>文档</span>
-          <strong>受保护 API 文档</strong>
-          <p class="muted">登录后可访问 Swagger UI、OpenAPI YAML 和 AI Reference。文档不会自动注入 sub2api 管理员 Key。</p>
-          <div class="actions compact-actions">
-            <a class="button-link secondary" href="docs/" target="_blank" rel="noreferrer">Swagger UI</a>
-            <a class="button-link secondary" href="docs/openapi.yaml" target="_blank" rel="noreferrer">OpenAPI</a>
-            <a class="button-link secondary" href="docs/AI_REFERENCE.md" target="_blank" rel="noreferrer">AI Reference</a>
-          </div>
         </article>
       </section>
 
@@ -1451,7 +1521,9 @@ onMounted(refreshMe)
               <div class="overlay-card">
                 <div class="overlay-spinner"></div>
                 <strong>正在加载账号列表</strong>
-                <span>请稍候，当前页内容即将更新。</span>
+                <span v-if="!accountQuerySlow">请稍候，当前页内容即将更新。</span>
+                <span v-else>sub2api 仍在处理，已等待 {{ accountQueryElapsedSeconds }} 秒。</span>
+                <button type="button" class="secondary" @click="cancelAccountQuery">取消本次查询</button>
               </div>
             </div>
             <div class="table-wrap">
@@ -1480,8 +1552,8 @@ onMounted(refreshMe)
                   <td>
                     <div class="cell-stack compact">
                       <div class="chip-row">
-                        <span class="tag">{{ displayValue(account.platform) }}</span>
-                        <span class="tag muted-tag">{{ displayValue(account.type) }}</span>
+                        <span class="tag">{{ platformLabel(account.platform) }}</span>
+                        <span class="tag muted-tag">{{ accountTypeLabel(account.type) }}</span>
                       </div>
                       <span class="tag" :class="`tag-${accountStatusTone(account)}`">{{ accountStatusLabel(account) }}</span>
                     </div>
@@ -1490,14 +1562,10 @@ onMounted(refreshMe)
                     <div class="cell-stack compact">
                       <div class="chip-row wrap group-preview-wrap">
                         <template v-if="accountGroupPreview(account).items.length">
-                          <button v-for="group in accountGroupPreview(account).items" :key="group.id" type="button" class="chip chip-button" @click="setGroupState(group.id, 'include')">{{ group.name }}</button>
-                          <span v-if="accountGroupPreview(account).extra" class="chip muted-chip chip-more">+{{ accountGroupPreview(account).extra }}</span>
+                          <button v-for="group in accountGroupPreview(account).items" :key="group.id" type="button" class="chip chip-button" @click="addIncludeGroupFilter(group.id)">{{ group.name }}</button>
+                          <button v-if="accountGroupPreview(account).extra" type="button" class="chip muted-chip chip-more chip-button" @click.stop="toggleFloatingGroupPopover(account, $event)">+{{ accountGroupPreview(account).extra }}</button>
                         </template>
                         <span v-else class="muted">未分组</span>
-                        <div v-if="accountGroupEntries(account).length > 2" class="group-popover">
-                          <span class="muted popover-label">完整分组</span>
-                          <button v-for="group in accountGroupEntries(account)" :key="`${accountID(account)}-${group.id}`" type="button" class="chip chip-button popover-chip" @click.stop="setGroupState(group.id, 'include')">{{ group.name }}</button>
-                        </div>
                       </div>
                     </div>
                   </td>
@@ -1531,6 +1599,53 @@ onMounted(refreshMe)
               </tbody>
             </table>
             </div>
+            <div class="mobile-account-list">
+              <article v-for="account in visibleAccounts" :key="`mobile-${String(account.id || accountName(account))}`" class="mobile-account-card">
+                <div class="mobile-account-head">
+                  <input type="checkbox" :checked="selectedAccountIds.has(accountID(account))" @change="toggleAccountSelection(account)" />
+                  <div class="mobile-account-title">
+                    <span class="muted cell-subtitle">{{ account.id || '未知 ID' }}</span>
+                    <strong>{{ accountName(account) }}</strong>
+                    <span v-if="accountNote(account)" class="muted account-note">{{ accountNote(account) }}</span>
+                  </div>
+                </div>
+                <div class="mobile-chip-grid">
+                  <span class="tag">{{ platformLabel(account.platform) }}</span>
+                  <span class="tag muted-tag">{{ accountTypeLabel(account.type) }}</span>
+                  <span class="tag" :class="`tag-${accountStatusTone(account)}`">{{ accountStatusLabel(account) }}</span>
+                  <span class="tag" :class="`tag-${accountScheduleTone(account)}`">{{ accountSchedule(account) }}</span>
+                </div>
+                <div class="mobile-meta-block">
+                  <span class="muted">分组</span>
+                  <div class="chip-row wrap">
+                    <template v-if="accountGroupPreview(account).items.length">
+                      <button v-for="group in accountGroupPreview(account).items" :key="group.id" type="button" class="chip chip-button" @click="addIncludeGroupFilter(group.id)">{{ group.name }}</button>
+                      <button v-if="accountGroupPreview(account).extra" type="button" class="chip muted-chip chip-button" @click.stop="toggleFloatingGroupPopover(account, $event)">+{{ accountGroupPreview(account).extra }}</button>
+                    </template>
+                    <span v-else class="muted">未分组</span>
+                  </div>
+                </div>
+                <div class="mobile-meta-grid">
+                  <div><span class="muted">代理</span><strong>{{ accountProxy(account) }}</strong></div>
+                  <div><span class="muted">最近使用</span><strong>{{ accountLastUsedLabel(account) }}</strong></div>
+                </div>
+                <div class="mobile-usage-list">
+                  <div v-for="metric in accountUsageMetrics(account)" :key="metric.label" class="usage-row">
+                    <span class="usage-meta">{{ metric.label }}</span>
+                    <div class="usage-bar-shell">
+                      <div class="usage-bar" :class="{ unknown: metric.value === null }" :style="{ width: `${usagePercentWidth(metric.value)}%` }"></div>
+                    </div>
+                    <strong class="usage-value">{{ metric.text }}</strong>
+                  </div>
+                </div>
+                <div class="mobile-account-actions">
+                  <button class="secondary" @click="openAccountDetail(account)">详情</button>
+                  <button class="secondary" @click="copyText(account.id, '账号 ID')">复制 ID</button>
+                  <button class="secondary" @click="copyText(accountName(account), '账号名称')">复制名称</button>
+                </div>
+              </article>
+              <p v-if="!visibleAccounts.length" class="muted mobile-empty">{{ accountPager.loaded ? '没有匹配的账号。' : '请选择站点并查询账号。' }}</p>
+            </div>
           </div>
           <p v-if="accountPager.loaded && visibleAccounts.length !== accounts.length" class="muted">当前页本地筛选命中 {{ visibleAccounts.length }} / {{ accounts.length }} 条。</p>
           <div class="pager">
@@ -1547,6 +1662,14 @@ onMounted(refreshMe)
         </section>
       </div>
     </section>
+
+    <div v-if="groupPopoverAccount" class="group-popover floating-group-popover" :style="{ top: `${groupPopoverPosition.top}px`, left: `${groupPopoverPosition.left}px` }">
+      <div class="popover-head">
+        <span class="muted popover-label">完整分组</span>
+        <button type="button" class="mini" @click.stop="closeGroupPopover">关闭</button>
+      </div>
+      <button v-for="group in accountGroupEntries(groupPopoverAccount)" :key="`${accountID(groupPopoverAccount)}-${group.id}`" type="button" class="chip chip-button popover-chip" @click.stop="addIncludeGroupFilter(group.id)">{{ group.name }}</button>
+    </div>
 
     <div v-if="showSiteModal" class="modal-mask">
       <form class="modal-card" @submit.prevent="saveSite">
@@ -1728,6 +1851,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .overlay-card span { color: #94a3b8; font-size: 13px; }
 .overlay-spinner { width: 22px; height: 22px; border-radius: 999px; border: 2px solid rgba(148, 163, 184, 0.24); border-top-color: #8b5cf6; animation: spin 0.9s linear infinite; }
 .table-wrap { overflow-x: auto; margin-top: 12px; }
+.mobile-account-list { display: none; }
 .account-table { width: 100%; min-width: 720px; border-collapse: collapse; }
 .account-table th,
 .account-table td { padding: 12px 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.16); text-align: left; vertical-align: top; }
@@ -1759,19 +1883,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .tag-neutral { background: rgba(148, 163, 184, 0.14); color: #e2e8f0; }
 .muted-tag, .muted-chip { opacity: 0.78; }
 .group-preview-wrap { position: relative; overflow: visible; }
-.group-preview-wrap::after {
-  content: ""; position: absolute; left: 0; top: 100%; z-index: 5; display: none; width: 100%; height: 12px;
-}
-.group-preview-wrap:hover::after,
-.group-preview-wrap:focus-within::after { display: block; }
 .group-popover {
-  position: absolute; left: 0; top: calc(100% + 8px); z-index: 6; min-width: 220px; max-width: 380px; display: none;
-  gap: 8px; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 14px; background: rgba(15, 23, 42, 0.98);
+  min-width: 220px; max-width: 380px; display: flex; flex-wrap: wrap; gap: 8px; padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.18); border-radius: 14px; background: rgba(15, 23, 42, 0.98);
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.34);
 }
-.group-preview-wrap:hover .group-popover,
-.group-preview-wrap:focus-within .group-popover { display: flex; flex-wrap: wrap; }
+.floating-group-popover {
+  position: absolute; z-index: 80; max-height: 360px; overflow: auto;
+}
+.popover-head { width: 100%; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
 .popover-label { width: 100%; font-size: 12px; }
+.popover-head .popover-label { width: auto; }
 .popover-chip { white-space: normal; }
 .usage-row { display: grid; grid-template-columns: 36px minmax(90px, 1fr) 54px; gap: 8px; align-items: center; }
 .usage-meta { color: #cbd5e1; font-size: 12px; }
@@ -1804,8 +1926,57 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 @media (max-width: 900px) {
   .layout-grid { grid-template-columns: 1fr; }
   .topbar { align-items: flex-start; flex-direction: column; }
+  .topbar-actions { width: 100%; justify-content: flex-start; }
   .overview-card.wide { grid-column: auto; }
   .account-table { min-width: 960px; }
+}
+@media (max-width: 640px) {
+  .app-shell { padding: 12px; }
+  .login-card { margin: 6vh auto; padding: 20px; }
+  .topbar, .panel, .modal-card { border-radius: 18px; padding: 14px; }
+  .topbar-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .topbar-actions button { padding: 10px 8px; }
+  .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .overview-card { padding: 12px; }
+  .overview-card strong { font-size: 18px; }
+  .overview-card p { font-size: 12px; }
+  .filter-grid, .advanced-grid { grid-template-columns: 1fr; }
+  .section-card, .local-filter, .batch-toolbar { padding: 12px; border-radius: 14px; }
+  .panel-head { align-items: flex-start; flex-direction: column; }
+  .panel-head > button, .panel-head .actions { width: 100%; }
+  .actions, .form-actions, .primary-actions, .modal-actions { display: grid; grid-template-columns: 1fr; align-items: stretch; }
+  .actions button, .form-actions button, .primary-actions button, .modal-actions button { width: 100%; }
+  .site-title { align-items: flex-start; flex-direction: column; }
+  .group-add-row { grid-template-columns: 1fr; }
+  .group-options { grid-template-columns: 1fr; }
+  .group-option { align-items: flex-start; flex-direction: column; }
+  .segmented { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); }
+  .table-wrap { margin-left: -2px; margin-right: -2px; }
+  .table-wrap { display: none; }
+  .mobile-account-list { display: grid; gap: 12px; margin-top: 12px; }
+  .mobile-account-card { display: grid; gap: 12px; padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(15, 23, 42, 0.58); }
+  .mobile-account-head { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
+  .mobile-account-title { min-width: 0; display: grid; gap: 4px; }
+  .mobile-account-title strong { overflow-wrap: anywhere; line-height: 1.35; }
+  .mobile-chip-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+  .mobile-meta-block { display: grid; gap: 6px; }
+  .mobile-meta-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .mobile-meta-grid div { display: grid; gap: 4px; padding: 10px; border-radius: 12px; background: rgba(2, 6, 23, 0.22); }
+  .mobile-meta-grid strong { overflow-wrap: anywhere; font-size: 13px; }
+  .mobile-usage-list { display: grid; gap: 8px; padding: 10px; border-radius: 12px; background: rgba(2, 6, 23, 0.22); }
+  .mobile-account-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .mobile-account-actions button { padding: 9px 8px; font-size: 12px; }
+  .mobile-empty { padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 14px; background: rgba(15, 23, 42, 0.4); }
+  .pager { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pager > * { width: 100%; justify-content: center; }
+  .jump-label { grid-column: span 2; justify-content: space-between; }
+  .jump-label input { width: 130px; }
+  .docs-links { display: grid; grid-template-columns: 1fr; }
+  .docs-reader pre { max-height: 520px; font-size: 12px; }
+  .modal-mask { align-items: start; padding: 12px; overflow: auto; }
+  .detail-card { max-height: none; }
+  .detail-grid { grid-template-columns: 86px 1fr; gap: 8px 10px; }
+  .floating-group-popover { left: 12px !important; right: 12px; max-width: none; min-width: 0; }
 }
 @keyframes progress-slide {
   0% { transform: translateX(-110%); }
