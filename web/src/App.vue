@@ -71,6 +71,9 @@ const batchTestForm = reactive({
   modelId: '',
   prompt: '',
   mode: '',
+  delayMs: 0,
+  jitterMs: 0,
+  logResponses: true,
 })
 
 const scheduleQuickFilter = ref('all')
@@ -121,7 +124,7 @@ const upstreamGroupOptions = computed(() => [{ id: 'ungrouped', name: '未分组
 
 const selectedAccountCount = computed(() => selectedAccountIds.value.size)
 
-const failedBatchTestIDs = computed(() => batchTestResults.value.filter((result) => result.ok !== true && result.message !== '检测中...').map((result) => Number(result.id)).filter((id) => Number.isFinite(id) && id > 0))
+const failedBatchTestIDs = computed(() => batchTestResults.value.filter((result) => !isBatchResultPending(result) && result.ok !== true).map((result) => Number(result.id)).filter((id) => Number.isFinite(id) && id > 0))
 
 const allVisibleSelected = computed(() => visibleAccounts.value.length > 0 && visibleAccounts.value.every((account) => selectedAccountIds.value.has(accountID(account))))
 
@@ -652,8 +655,9 @@ async function testSelectedAccounts() {
   }
   batchTesting.value = true
   try {
-    for (const id of ids) {
-      batchTestResults.value = [...batchTestResults.value, { id, ok: false, message: '检测中...' }]
+    for (const [index, id] of ids.entries()) {
+      if (index > 0) await waitForBatchDelay()
+      batchTestResults.value = [...batchTestResults.value, { id, pending: true, message: '检测中...' }]
       const payload = await api<{ items: Record<string, unknown>[] }>(`api/sites/${activeSiteId.value}/accounts`, {
         method: 'POST',
         body: JSON.stringify({ ids: [id], ...batchTestForm }),
@@ -666,6 +670,29 @@ async function testSelectedAccounts() {
   } finally {
     batchTesting.value = false
   }
+}
+
+function waitForBatchDelay() {
+  const base = Math.max(0, Number(batchTestForm.delayMs) || 0)
+  const jitter = Math.max(0, Number(batchTestForm.jitterMs) || 0)
+  const offset = jitter ? Math.round((Math.random() * 2 - 1) * jitter) : 0
+  const delay = Math.max(0, base + offset)
+  return new Promise((resolve) => window.setTimeout(resolve, delay))
+}
+
+function isBatchResultPending(result: Record<string, unknown>) {
+  return result.pending === true || result.message === '检测中...'
+}
+
+function batchResultLabel(result: Record<string, unknown>) {
+  if (isBatchResultPending(result)) return '测试中'
+  return result.ok ? '成功' : '失败'
+}
+
+function batchResultHint(result: Record<string, unknown>) {
+  if (isBatchResultPending(result)) return '测试中'
+  if (result.ok === true && !result.hint && !result.resetAt) return '正常'
+  return result.hint || result.resetAt || '无明确提示'
 }
 
 async function retryFailedBatchTests() {
@@ -961,6 +988,9 @@ onMounted(refreshMe)
                 <option value="image">image</option>
               </select>
             </label>
+            <label>基础间隔(ms)<input v-model.number="batchTestForm.delayMs" type="number" min="0" step="100" /></label>
+            <label>随机抖动(ms)<input v-model.number="batchTestForm.jitterMs" type="number" min="0" step="100" /></label>
+            <label class="inline-check"><input v-model="batchTestForm.logResponses" type="checkbox" /> 临时记录响应日志</label>
             <button class="secondary" :disabled="batchTesting || selectedAccountCount === 0" @click="testSelectedAccounts">{{ batchTesting ? '检测中...' : '检测选中账号' }}</button>
             <button class="secondary" :disabled="selectedAccountCount === 0" @click="clearAccountSelection">清空选择</button>
           </div>
@@ -1016,11 +1046,11 @@ onMounted(refreshMe)
                 <tbody>
                   <tr v-for="result in batchTestResults" :key="String(result.id)">
                     <td>{{ result.id }}</td>
-                    <td>{{ result.ok ? '成功' : '失败' }}</td>
+                    <td>{{ batchResultLabel(result) }}</td>
                     <td>{{ result.model || '未知' }}</td>
                     <td>{{ result.statusCode || '未知' }}</td>
                     <td>{{ result.durationMs ?? '未知' }} ms</td>
-                    <td>{{ result.hint || result.resetAt || '无明确提示' }}</td>
+                    <td>{{ batchResultHint(result) }}</td>
                     <td><pre class="inline-json">{{ result.message || result.error || '无响应内容' }}</pre></td>
                   </tr>
                 </tbody>
@@ -1170,6 +1200,7 @@ input, select {
   border-radius: 12px; color: #f8fafc; background: rgba(15, 23, 42, 0.86); outline: none;
 }
 input[type="checkbox"] { width: auto; }
+.inline-check { display: flex; grid-auto-flow: column; grid-template-columns: auto 1fr; align-items: center; }
 button {
   border: 0; border-radius: 12px; padding: 11px 14px; color: #fff; background: linear-gradient(135deg, #7c3aed, #2563eb);
   cursor: pointer; font-weight: 700;

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -359,6 +361,7 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 		ModelID string  `json:"modelId"`
 		Prompt  string  `json:"prompt"`
 		Mode    string  `json:"mode"`
+		Log     bool    `json:"logResponses"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
@@ -393,11 +396,14 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 			result["ok"] = false
 			result["error"] = err.Error()
 		} else {
-			ok, message, model, hint, resetAt := summarizeAccountTestSSE(string(sanitizeJSONForBrowser(data)))
+			sanitizedBody := string(sanitizeJSONForBrowser(data))
+			ok, message, model, hint, resetAt := summarizeAccountTestSSE(sanitizedBody)
 			result["ok"] = ok
 			result["message"] = message
 			if hint != "" {
 				result["hint"] = hint
+			} else if ok {
+				result["hint"] = "正常"
 			}
 			if resetAt != "" {
 				result["resetAt"] = resetAt
@@ -405,7 +411,14 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 			if model != "" {
 				result["model"] = model
 			}
-			result["body"] = string(sanitizeJSONForBrowser(data))
+			result["body"] = sanitizedBody
+			if input.Log {
+				if path, err := writeBatchTestLog(siteID, accountID, sanitizedBody); err == nil {
+					result["logPath"] = path
+				} else {
+					result["logError"] = err.Error()
+				}
+			}
 		}
 		results = append(results, result)
 	}
@@ -478,15 +491,31 @@ func parseKnownTestHint(text string) (string, string) {
 	if !strings.Contains(lower, "429") && !strings.Contains(lower, "rate_limit") && !strings.Contains(lower, "rate limit") && !strings.Contains(lower, "usage_limit_reached") {
 		return "", ""
 	}
+	parts := []string{"限流或额度耗尽"}
+	if planType := firstKnownTimeValue(text, "plan_type"); planType != "" {
+		parts = append(parts, "套餐: "+planType)
+	}
 	resetAt := firstKnownTimeValue(text, "resets_at", "reset_at", "rate_limit_reset_at")
+	formattedReset := formatKnownTimeValue(resetAt)
 	if resetAt != "" {
-		return "限流，恢复时间: " + resetAt, resetAt
+		parts = append(parts, "恢复时间: "+formattedReset)
 	}
 	retryAfter := firstKnownTimeValue(text, "retry_after", "resets_in_seconds", "reset_after_seconds")
 	if retryAfter != "" {
-		return "限流，建议等待: " + retryAfter + " 秒", ""
+		parts = append(parts, "建议等待: "+retryAfter+" 秒")
 	}
-	return "限流或额度耗尽", ""
+	return strings.Join(parts, "，"), formattedReset
+}
+
+func formatKnownTimeValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if unixSeconds, err := strconv.ParseInt(value, 10, 64); err == nil && unixSeconds > 946684800 {
+		return time.Unix(unixSeconds, 0).UTC().Format(time.RFC3339)
+	}
+	return value
 }
 
 func firstKnownTimeValue(text string, keys ...string) string {
@@ -513,6 +542,28 @@ func firstKnownTimeValue(text string, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func writeBatchTestLog(siteID, accountID int64, body string) (string, error) {
+	dir := "/tmp/subadmin-batch-tests"
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
+	path := filepath.Join(dir, fmt.Sprintf("%s_site-%d_account-%d.log", stamp, siteID, accountID))
+	cleanBody := redactSensitiveText(body)
+	if err := os.WriteFile(path, []byte(cleanBody), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func redactSensitiveText(text string) string {
+	result := text
+	result = regexp.MustCompile(`(?i)(access_token|refresh_token|id_token|token|api_key|key|secret|password|cookie|authorization)\s*[:=]\s*"?[^"\s,}]+"?`).ReplaceAllString(result, "$1:[redacted]")
+	result = regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]+`).ReplaceAllString(result, "$1[redacted]")
+	result = regexp.MustCompile(`(?i)sk-[A-Za-z0-9_-]+`).ReplaceAllString(result, "[redacted]")
+	return result
 }
 
 func shellPage() string {
