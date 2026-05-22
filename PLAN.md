@@ -59,10 +59,10 @@ Completed:
   - exclude: account must not contain the group.
   - ignored: group is not part of the filter list.
 - Lightweight dashboard overview cards based on loaded site/account data.
+- Account detail modal now has clearer read-only sections for basic info, groups/proxy, scheduling, usage, and errors.
 
 Next:
 
-- Better account detail sections for scheduling, usage, errors, groups, and proxy info.
 - Clearer UI messaging for local result-set filters versus upstream query filters.
 - Optional copy helpers for account ID, name, and active filter summary.
 
@@ -138,4 +138,4 @@ Status: ongoing.
 
 ## Immediate Next Step
 
-Enhance the account detail modal with clearer read-only sections for scheduling, usage, errors, groups, and proxy info. Keep all sensitive upstream fields redacted.
+Improve UI messaging for filters that run locally on the current result set versus filters sent to the upstream account-list API.

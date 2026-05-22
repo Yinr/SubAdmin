@@ -478,6 +478,48 @@ function accountUsage(account: Account) {
   return [primary !== undefined ? `短窗 ${primary}%` : '', secondary !== undefined ? `长窗 ${secondary}%` : ''].filter(Boolean).join(' / ') || '未知'
 }
 
+function displayValue(value: unknown) {
+  if (value === undefined || value === null || value === '') return '未知'
+  return String(value)
+}
+
+function accountErrorText(account: Account) {
+  return displayValue(account.error_message || account.error || account.last_error)
+}
+
+function accountUsageRows(account: Account) {
+  const extra = (account.extra || {}) as Record<string, unknown>
+  return [
+    ['短窗用量', extra.codex_primary_used_percent ?? extra.codex_5h_used_percent],
+    ['长窗用量', extra.codex_secondary_used_percent ?? extra.codex_7d_used_percent],
+    ['窗口开始', account.session_window_start],
+    ['窗口结束', account.session_window_end],
+    ['窗口状态', account.session_window_status],
+  ].map(([label, value]) => ({ label: String(label), value: value === undefined || value === null || value === '' ? '未知' : String(value) }))
+}
+
+function accountScheduleRows(account: Account) {
+  return [
+    ['调度状态', accountSchedule(account)],
+    ['Schedulable', account.schedulable === false ? 'false' : 'true'],
+    ['限流时间', formatDateTime(account.rate_limited_at)],
+    ['限流恢复', formatDateTime(account.rate_limit_reset_at)],
+    ['过载冷却', formatDateTime(account.overload_until)],
+    ['临时不可调度', formatDateTime(account.temp_unschedulable_until)],
+    ['临时原因', account.temp_unschedulable_reason],
+  ].map(([label, value]) => ({ label: String(label), value: displayValue(value) }))
+}
+
+function accountProxyRows(account: Account) {
+  const proxy = account.proxy as Record<string, unknown> | undefined
+  return [
+    ['代理', accountProxy(account)],
+    ['代理 ID', account.proxy_id],
+    ['代理名称', proxy?.name],
+    ['代理类型', proxy?.type],
+  ].map(([label, value]) => ({ label: String(label), value: displayValue(value) }))
+}
+
 function formatDateTime(value: unknown) {
   if (!value) return '未知'
   const date = new Date(String(value))
@@ -774,15 +816,46 @@ onMounted(refreshMe)
       <section class="modal-card detail-card">
         <h2>账号详情</h2>
         <p class="muted">来自当前列表结果，敏感字段已隐藏。</p>
-        <div class="detail-grid">
-          <span>名称</span><strong>{{ accountName(selectedAccount) }}</strong>
-          <span>平台</span><strong>{{ selectedAccount.platform || '未知' }}</strong>
-          <span>状态</span><strong>{{ selectedAccount.status || '未知' }}</strong>
-          <span>优先级</span><strong>{{ selectedAccount.priority ?? '未知' }}</strong>
-          <span>分组</span><strong>{{ accountGroups(selectedAccount) }}</strong>
-          <span>代理</span><strong>{{ accountProxy(selectedAccount) }}</strong>
-          <span>调度</span><strong>{{ accountSchedule(selectedAccount) }}</strong>
-          <span>最近使用</span><strong>{{ formatDateTime(selectedAccount.last_used_at) }}</strong>
+        <div class="detail-sections">
+          <section class="detail-section">
+            <h3>基础信息</h3>
+            <div class="detail-grid">
+              <span>ID</span><strong>{{ selectedAccount.id || '未知' }}</strong>
+              <span>名称</span><strong>{{ accountName(selectedAccount) }}</strong>
+              <span>平台</span><strong>{{ selectedAccount.platform || '未知' }}</strong>
+              <span>类型</span><strong>{{ selectedAccount.type || '未知' }}</strong>
+              <span>状态</span><strong>{{ selectedAccount.status || '未知' }}</strong>
+              <span>优先级</span><strong>{{ selectedAccount.priority ?? '未知' }}</strong>
+              <span>并发</span><strong>{{ selectedAccount.concurrency ?? '未知' }}</strong>
+              <span>最近使用</span><strong>{{ formatDateTime(selectedAccount.last_used_at) }}</strong>
+            </div>
+          </section>
+          <section class="detail-section">
+            <h3>分组与代理</h3>
+            <div class="detail-grid">
+              <span>分组</span><strong>{{ accountGroups(selectedAccount) }}</strong>
+              <template v-for="row in accountProxyRows(selectedAccount)" :key="row.label">
+                <span>{{ row.label }}</span><strong>{{ row.value }}</strong>
+              </template>
+            </div>
+          </section>
+          <section class="detail-section">
+            <h3>调度状态</h3>
+            <div class="detail-grid">
+              <template v-for="row in accountScheduleRows(selectedAccount)" :key="row.label">
+                <span>{{ row.label }}</span><strong>{{ row.value }}</strong>
+              </template>
+            </div>
+          </section>
+          <section class="detail-section">
+            <h3>用量与错误</h3>
+            <div class="detail-grid">
+              <template v-for="row in accountUsageRows(selectedAccount)" :key="row.label">
+                <span>{{ row.label }}</span><strong>{{ row.value }}</strong>
+              </template>
+              <span>错误信息</span><strong>{{ accountErrorText(selectedAccount) }}</strong>
+            </div>
+          </section>
         </div>
         <pre class="detail-json">{{ accountDetailJSON(selectedAccount) }}</pre>
         <div class="modal-actions">
@@ -823,6 +896,7 @@ onMounted(refreshMe)
 .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
 .eyebrow { margin: 0 0 8px; color: #c4b5fd; letter-spacing: 0.16em; text-transform: uppercase; font-size: 12px; }
 h1, h2 { margin: 0; }
+h3 { margin: 0 0 10px; font-size: 15px; }
 .muted { color: #94a3b8; }
 .error { color: #fecaca; }
 .form-block, .filter-grid, .modal-card { display: grid; gap: 14px; }
@@ -863,8 +937,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .modal-mask { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(2, 6, 23, 0.72); }
 .modal-card { width: min(560px, 100%); padding: 22px; }
 .detail-card { width: min(820px, 100%); max-height: calc(100vh - 56px); overflow: auto; }
+.detail-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 16px 0; }
+.detail-section { padding: 14px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 16px; background: rgba(2, 6, 23, 0.25); }
 .detail-grid { display: grid; grid-template-columns: 110px 1fr; gap: 10px 14px; margin: 16px 0; }
+.detail-section .detail-grid { margin: 0; }
 .detail-grid span { color: #94a3b8; }
+.detail-grid strong { overflow-wrap: anywhere; }
 .detail-json { overflow: auto; max-height: 360px; padding: 14px; border-radius: 14px; background: rgba(2, 6, 23, 0.55); color: #dbeafe; font-size: 12px; line-height: 1.55; }
 .modal-actions { justify-content: flex-end; }
 @media (max-width: 900px) {
