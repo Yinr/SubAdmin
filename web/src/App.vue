@@ -1041,125 +1041,129 @@ onMounted(refreshMe)
             <h2>上游账号</h2>
             <button class="secondary" :disabled="accountsLoading" @click="reloadAccountsFromUpstream">刷新</button>
           </div>
-          <div class="filter-note">
-            <strong>上游查询筛选</strong>
-            <span>以下条件会发送到 sub2api 账号列表接口，会影响上游返回的数据范围。</span>
-          </div>
-          <form class="filter-grid" @submit.prevent="submitAccountFilters">
-            <label>搜索<input v-model="accountFilters.search" placeholder="名称、备注或标识" /></label>
-            <label>平台
-              <select v-model="accountFilters.platform">
-                <option value="">全部</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
-                <option value="gemini">Gemini</option>
-                <option value="antigravity">Antigravity</option>
-              </select>
-            </label>
-            <label>状态
-              <select v-model="accountFilters.status">
-                <option value="">全部</option>
-                <option value="active">active</option>
-                <option value="disabled">disabled</option>
-                <option value="error">error</option>
-                <option value="unused">unused</option>
-                <option value="used">used</option>
-                <option value="expired">expired</option>
-              </select>
-            </label>
-            <label>类型
-              <select v-model="accountFilters.type">
-                <option value="">全部</option>
-                <option value="oauth">OAuth</option>
-                <option value="setup-token">Setup Token</option>
-                <option value="apikey">API Key</option>
-                <option value="upstream">Upstream</option>
-                <option value="bedrock">Bedrock</option>
-                <option value="service-account">Service Account</option>
-              </select>
-            </label>
-            <label>隐私模式
-              <select v-model="accountFilters.privacyMode">
-                <option value="">全部</option>
-                <option value="training_off">OpenAI: training_off</option>
-                <option value="training_set_failed">OpenAI: training_set_failed</option>
-                <option value="training_set_cf_blocked">OpenAI: training_set_cf_blocked</option>
-                <option value="privacy_set">Antigravity: privacy_set</option>
-                <option value="privacy_set_failed">Antigravity: privacy_set_failed</option>
-                <option value="__unset__">未设置</option>
-              </select>
-            </label>
-            <label>上游分组
-              <select v-model="accountFilters.upstreamGroup">
-                <option value="">全部</option>
-                <option v-for="group in upstreamGroupOptions" :key="group.id" :value="group.id">{{ group.name }}</option>
-              </select>
-            </label>
-            <label>排序字段
-              <select v-model="accountFilters.sortBy">
-                <option value="name">名称</option>
-                <option value="created_at">创建时间</option>
-                <option value="updated_at">更新时间</option>
-                <option value="last_used_at">最近使用</option>
-                <option value="priority">优先级</option>
-                <option value="rate_limited_at">限流时间</option>
-              </select>
-            </label>
-            <label>排序方向
-              <select v-model="accountFilters.sortOrder">
-                <option value="asc">升序</option>
-                <option value="desc">降序</option>
-              </select>
-            </label>
-            <label>每页数量
-              <select v-model.number="accountPager.pageSize" @change="changeAccountPageSize">
-                <option :value="10">10</option>
-                <option :value="20">20</option>
-                <option :value="50">50</option>
-              </select>
-            </label>
-            <button type="submit" :disabled="accountsLoading">{{ accountsLoading ? '查询中...' : '查询' }}</button>
-            <button type="button" class="secondary" :disabled="accountsLoading" @click="clearAccountFilters">清空筛选</button>
-          </form>
-          <section class="local-filter">
-            <div class="filter-note compact">
-              <strong>当前页本地筛选</strong>
-              <span>以下条件只过滤当前已加载结果。需要先按单个分组缩小范围时，请用上方“上游分组”。</span>
-            </div>
-            <label>调度状态
-              <select v-model="scheduleQuickFilter">
-                <option value="all">全部</option>
-                <option value="ready">可调度</option>
-                <option value="rate">限流中</option>
-                <option value="overload">过载冷却</option>
-                <option value="temp">临时不可调度</option>
-                <option value="blocked">不可调度</option>
-              </select>
-            </label>
-            <div class="group-filter-head">
-              <strong>分组三态筛选</strong>
-              <span class="muted">未加入筛选列表的分组默认随意</span>
-            </div>
-            <p v-if="groupsLoading" class="muted">正在加载分组选项...</p>
-            <div class="group-add-row">
-              <select v-model="groupToAdd" :disabled="!addableGroupOptions.length">
-                <option value="">选择分组加入筛选</option>
-                <option v-for="group in addableGroupOptions" :key="group.id" :value="group.id">{{ group.name }}</option>
-              </select>
-              <button type="button" class="secondary" :disabled="!groupToAdd" @click="addGroupFilter">加入</button>
-            </div>
-            <div class="group-options" v-if="groupFilterItems.length">
-              <div v-for="group in groupFilterItems" :key="group.id" class="group-option">
-                <span>{{ group.name }}</span>
-                <div class="segmented">
-                  <button type="button" :class="{ active: groupState(group.id) === 'include' }" @click="setGroupState(group.id, 'include')">选中</button>
-                  <button type="button" :class="{ active: groupState(group.id) === 'exclude' }" @click="setGroupState(group.id, 'exclude')">不选中</button>
-                  <button type="button" @click="setGroupState(group.id, 'any')">移除</button>
-                </div>
+          <section class="section-card">
+            <div class="section-title">
+              <div>
+                <h3>查询筛选</h3>
+                <p class="muted">基础条件会发送到 sub2api 账号列表接口。</p>
               </div>
             </div>
-            <p v-else-if="!groupsLoading" class="muted">暂无分组筛选；需要限制时先选择分组并加入。</p>
-            <p v-if="!groupOptions.length && !groupsLoading" class="muted">暂无分组选项；查询账号后也会从当前列表补充分组。</p>
+            <form class="filter-grid" @submit.prevent="submitAccountFilters">
+              <label>搜索<input v-model="accountFilters.search" placeholder="名称、备注或标识" /></label>
+              <label>平台
+                <select v-model="accountFilters.platform">
+                  <option value="">全部</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="antigravity">Antigravity</option>
+                </select>
+              </label>
+              <label>状态
+                <select v-model="accountFilters.status">
+                  <option value="">全部</option>
+                  <option value="active">active</option>
+                  <option value="disabled">disabled</option>
+                  <option value="error">error</option>
+                  <option value="unused">unused</option>
+                  <option value="used">used</option>
+                  <option value="expired">expired</option>
+                </select>
+              </label>
+              <label>类型
+                <select v-model="accountFilters.type">
+                  <option value="">全部</option>
+                  <option value="oauth">OAuth</option>
+                  <option value="setup-token">Setup Token</option>
+                  <option value="apikey">API Key</option>
+                  <option value="upstream">Upstream</option>
+                  <option value="bedrock">Bedrock</option>
+                  <option value="service-account">Service Account</option>
+                </select>
+              </label>
+              <label>上游分组
+                <select v-model="accountFilters.upstreamGroup">
+                  <option value="">全部</option>
+                  <option v-for="group in upstreamGroupOptions" :key="group.id" :value="group.id">{{ group.name }}</option>
+                </select>
+              </label>
+              <label>每页数量
+                <select v-model.number="accountPager.pageSize" @change="changeAccountPageSize">
+                  <option :value="10">10</option>
+                  <option :value="20">20</option>
+                  <option :value="50">50</option>
+                </select>
+              </label>
+              <div class="form-actions">
+                <button type="submit" :disabled="accountsLoading">{{ accountsLoading ? '查询中...' : '查询' }}</button>
+                <button type="button" class="secondary" :disabled="accountsLoading" @click="clearAccountFilters">清空筛选</button>
+              </div>
+            </form>
+            <details class="advanced-block">
+              <summary>高级查询与本地筛选</summary>
+              <div class="filter-grid advanced-grid">
+                <label>隐私模式
+                  <select v-model="accountFilters.privacyMode">
+                    <option value="">全部</option>
+                    <option value="training_off">OpenAI: training_off</option>
+                    <option value="training_set_failed">OpenAI: training_set_failed</option>
+                    <option value="training_set_cf_blocked">OpenAI: training_set_cf_blocked</option>
+                    <option value="privacy_set">Antigravity: privacy_set</option>
+                    <option value="privacy_set_failed">Antigravity: privacy_set_failed</option>
+                    <option value="__unset__">未设置</option>
+                  </select>
+                </label>
+                <label>排序字段
+                  <select v-model="accountFilters.sortBy">
+                    <option value="name">名称</option>
+                    <option value="created_at">创建时间</option>
+                    <option value="updated_at">更新时间</option>
+                    <option value="last_used_at">最近使用</option>
+                    <option value="priority">优先级</option>
+                    <option value="rate_limited_at">限流时间</option>
+                  </select>
+                </label>
+                <label>排序方向
+                  <select v-model="accountFilters.sortOrder">
+                    <option value="asc">升序</option>
+                    <option value="desc">降序</option>
+                  </select>
+                </label>
+                <label>调度状态
+                  <select v-model="scheduleQuickFilter">
+                    <option value="all">全部</option>
+                    <option value="ready">可调度</option>
+                    <option value="rate">限流中</option>
+                    <option value="overload">过载冷却</option>
+                    <option value="temp">临时不可调度</option>
+                    <option value="blocked">不可调度</option>
+                  </select>
+                </label>
+              </div>
+              <div class="group-filter-head">
+                <strong>分组三态筛选</strong>
+                <span class="muted">只过滤当前已加载结果；未加入筛选列表的分组默认随意。</span>
+              </div>
+              <p v-if="groupsLoading" class="muted">正在加载分组选项...</p>
+              <div class="group-add-row">
+                <select v-model="groupToAdd" :disabled="!addableGroupOptions.length">
+                  <option value="">选择分组加入筛选</option>
+                  <option v-for="group in addableGroupOptions" :key="group.id" :value="group.id">{{ group.name }}</option>
+                </select>
+                <button type="button" class="secondary" :disabled="!groupToAdd" @click="addGroupFilter">加入</button>
+              </div>
+              <div class="group-options" v-if="groupFilterItems.length">
+                <div v-for="group in groupFilterItems" :key="group.id" class="group-option">
+                  <span>{{ group.name }}</span>
+                  <div class="segmented">
+                    <button type="button" :class="{ active: groupState(group.id) === 'include' }" @click="setGroupState(group.id, 'include')">选中</button>
+                    <button type="button" :class="{ active: groupState(group.id) === 'exclude' }" @click="setGroupState(group.id, 'exclude')">不选中</button>
+                    <button type="button" @click="setGroupState(group.id, 'any')">移除</button>
+                  </div>
+                </div>
+              </div>
+              <p v-else-if="!groupsLoading" class="muted">暂无分组筛选；需要限制时先选择分组并加入。</p>
+            </details>
           </section>
           <p v-if="accountError" class="error">{{ accountError }}</p>
           <p v-if="activeAccountFilters" class="muted filter-summary">
@@ -1167,27 +1171,45 @@ onMounted(refreshMe)
             <button type="button" class="mini" @click="copyText(activeAccountFilters, '筛选条件')">复制</button>
             <span v-if="filteredIDCacheHit" class="pill">已缓存筛选 ID</span>
           </p>
-          <div class="batch-toolbar">
-            <span class="muted">已选择 {{ selectedAccountCount }} 个账号，OpenAI 留空默认模型为 gpt-5.4；检测会逐个账号执行并追加结果。</span>
-            <label>测试模型<input v-model="batchTestForm.modelId" placeholder="留空使用 sub2api 默认测试模型" /></label>
-            <label>提示词<input v-model="batchTestForm.prompt" placeholder="留空使用上游默认测试提示" /></label>
-            <label>模式
-              <select v-model="batchTestForm.mode">
-                <option value="">默认</option>
-                <option value="chat">chat</option>
-                <option value="responses">responses</option>
-                <option value="image">image</option>
-              </select>
-            </label>
-            <label>基础间隔(ms)<input v-model.number="batchTestForm.delayMs" type="number" min="0" step="100" /></label>
-            <label>随机抖动(ms)<input v-model.number="batchTestForm.jitterMs" type="number" min="0" step="100" /></label>
-            <label class="inline-check"><input v-model="batchTestForm.logResponses" type="checkbox" /> 临时记录响应日志</label>
-            <button class="secondary" :disabled="batchTesting || selectedAccountCount === 0" @click="testSelectedAccounts">{{ batchTesting ? '检测中...' : '检测选中账号' }}</button>
-            <button class="secondary" :disabled="batchTesting || batchCollecting || !activeSiteId" @click="testAllFilteredAccounts">{{ batchCollecting ? '收集中...' : '检测当前筛选全部' }}</button>
-            <button class="secondary" :disabled="batchRefreshing || selectedAccountCount === 0" @click="refreshSelectedAccountTokens">{{ batchRefreshing ? '刷新中...' : '刷新选中令牌' }}</button>
-            <button class="secondary" :disabled="batchRefreshing || batchCollecting || !activeSiteId" @click="refreshAllFilteredAccountTokens">{{ batchCollecting ? '收集中...' : '刷新当前筛选全部令牌' }}</button>
-            <button class="secondary" :disabled="selectedAccountCount === 0" @click="clearAccountSelection">一键取消选择</button>
-          </div>
+          <section class="section-card batch-section">
+            <div class="section-title">
+              <div>
+                <h3>批量操作</h3>
+                <p class="muted">已选择 {{ selectedAccountCount }} 个账号；当前筛选全部会先汇总账号 ID 并缓存。</p>
+              </div>
+              <button class="secondary" :disabled="selectedAccountCount === 0" @click="clearAccountSelection">一键取消选择</button>
+            </div>
+            <div class="primary-actions">
+              <button :disabled="batchTesting || selectedAccountCount === 0" @click="testSelectedAccounts">{{ batchTesting ? '检测中...' : '检测选中账号' }}</button>
+              <button class="secondary" :disabled="batchTesting || batchCollecting || !activeSiteId" @click="testAllFilteredAccounts">{{ batchCollecting ? '收集中...' : '检测当前筛选全部' }}</button>
+            </div>
+            <details class="advanced-block">
+              <summary>检测参数</summary>
+              <div class="filter-grid advanced-grid">
+                <label>测试模型<input v-model="batchTestForm.modelId" placeholder="留空使用 sub2api 默认测试模型" /></label>
+                <label>提示词<input v-model="batchTestForm.prompt" placeholder="留空使用上游默认测试提示" /></label>
+                <label>模式
+                  <select v-model="batchTestForm.mode">
+                    <option value="">默认</option>
+                    <option value="chat">chat</option>
+                    <option value="responses">responses</option>
+                    <option value="image">image</option>
+                  </select>
+                </label>
+                <label>基础间隔(ms)<input v-model.number="batchTestForm.delayMs" type="number" min="0" step="100" /></label>
+                <label>随机抖动(ms)<input v-model.number="batchTestForm.jitterMs" type="number" min="0" step="100" /></label>
+                <label class="inline-check"><input v-model="batchTestForm.logResponses" type="checkbox" /> 临时记录响应日志</label>
+              </div>
+            </details>
+            <details class="advanced-block danger-block">
+              <summary>刷新令牌</summary>
+              <p class="muted">会修改 sub2api 上游账号 credentials，建议先按测试分组筛选并确认范围。</p>
+              <div class="primary-actions">
+                <button class="secondary" :disabled="batchRefreshing || selectedAccountCount === 0" @click="refreshSelectedAccountTokens">{{ batchRefreshing ? '刷新中...' : '刷新选中令牌' }}</button>
+                <button class="secondary" :disabled="batchRefreshing || batchCollecting || !activeSiteId" @click="refreshAllFilteredAccountTokens">{{ batchCollecting ? '收集中...' : '刷新当前筛选全部令牌' }}</button>
+              </div>
+            </details>
+          </section>
           <p v-if="batchCollecting" class="muted">正在按当前筛选条件分页收集账号 ID...</p>
           <p v-if="batchTesting" class="muted">正在检测 {{ selectedAccountCount }} 个账号；每个账号完成后会更新一行结果。大批量会自动提高最小间隔。</p>
           <p v-if="batchRefreshing" class="muted">正在刷新账号 OAuth 令牌；sub2api 批量刷新接口会修改上游账号凭证。</p>
@@ -1409,6 +1431,16 @@ h3 { margin: 0 0 10px; font-size: 15px; }
 .error { color: #fecaca; }
 .form-block, .filter-grid, .modal-card { display: grid; gap: 14px; }
 .filter-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
+.section-card { display: grid; gap: 12px; margin: 14px 0; padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(15, 23, 42, 0.46); }
+.section-title { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.section-title p { margin: 6px 0 0; }
+.form-actions, .primary-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.advanced-block { margin-top: 4px; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.12); border-radius: 14px; background: rgba(2, 6, 23, 0.2); }
+.advanced-block summary { cursor: pointer; color: #ddd6fe; font-weight: 700; }
+.advanced-block > *:not(summary) { margin-top: 12px; }
+.advanced-grid { margin-top: 12px; }
+.danger-block { border-color: rgba(248, 113, 113, 0.2); }
+.batch-section { background: linear-gradient(135deg, rgba(30, 41, 59, 0.66), rgba(15, 23, 42, 0.5)); }
 .filter-note { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin: 8px 0 12px; padding: 10px 12px; border-radius: 14px; background: rgba(37, 99, 235, 0.1); color: #cbd5e1; }
 .filter-note.compact { margin-top: 0; }
 .filter-note span { color: #94a3b8; font-size: 13px; }
