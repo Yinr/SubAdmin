@@ -60,10 +60,10 @@ Completed:
   - ignored: group is not part of the filter list.
 - Lightweight dashboard overview cards based on loaded site/account data.
 - Account detail modal now has clearer read-only sections for basic info, groups/proxy, scheduling, usage, and errors.
+- Filter UI now separates upstream query filters from current-page local filters.
 
 Next:
 
-- Clearer UI messaging for local result-set filters versus upstream query filters.
 - Optional copy helpers for account ID, name, and active filter summary.
 
 ## Phase 3: Protected Docs Integration
@@ -138,4 +138,4 @@ Status: ongoing.
 
 ## Immediate Next Step
 
-Improve UI messaging for filters that run locally on the current result set versus filters sent to the upstream account-list API.
+Add optional copy helpers for account ID, account name, and active filter summary.

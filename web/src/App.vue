@@ -646,6 +646,10 @@ onMounted(refreshMe)
             <h2>上游账号</h2>
             <button class="secondary" :disabled="accountsLoading" @click="loadAccounts({ force: true })">刷新</button>
           </div>
+          <div class="filter-note">
+            <strong>上游查询筛选</strong>
+            <span>以下条件会发送到 sub2api 账号列表接口，会影响上游返回的数据范围。</span>
+          </div>
           <form class="filter-grid" @submit.prevent="submitAccountFilters">
             <label>搜索<input v-model="accountFilters.search" placeholder="名称、备注或标识" /></label>
             <label>平台
@@ -713,6 +717,14 @@ onMounted(refreshMe)
                 <option :value="50">50</option>
               </select>
             </label>
+            <button type="submit" :disabled="accountsLoading">{{ accountsLoading ? '查询中...' : '查询' }}</button>
+            <button type="button" class="secondary" :disabled="accountsLoading" @click="clearAccountFilters">清空筛选</button>
+          </form>
+          <section class="local-filter">
+            <div class="filter-note compact">
+              <strong>当前页本地筛选</strong>
+              <span>以下条件只过滤当前已加载结果，不会重新请求上游，也不代表全库命中数量。</span>
+            </div>
             <label>调度状态
               <select v-model="scheduleQuickFilter">
                 <option value="all">全部</option>
@@ -723,10 +735,6 @@ onMounted(refreshMe)
                 <option value="blocked">不可调度</option>
               </select>
             </label>
-            <button type="submit" :disabled="accountsLoading">{{ accountsLoading ? '查询中...' : '查询' }}</button>
-            <button type="button" class="secondary" :disabled="accountsLoading" @click="clearAccountFilters">清空筛选</button>
-          </form>
-          <section class="group-filter">
             <div class="group-filter-head">
               <strong>分组三态筛选</strong>
               <span class="muted">未加入筛选列表的分组默认随意</span>
@@ -782,7 +790,7 @@ onMounted(refreshMe)
               </tbody>
             </table>
           </div>
-          <p v-if="accountPager.loaded && visibleAccounts.length !== accounts.length" class="muted">当前页命中 {{ visibleAccounts.length }} / {{ accounts.length }} 条。</p>
+          <p v-if="accountPager.loaded && visibleAccounts.length !== accounts.length" class="muted">当前页本地筛选命中 {{ visibleAccounts.length }} / {{ accounts.length }} 条。</p>
           <div class="pager">
             <button class="secondary" :disabled="accountPager.page <= 1 || accountsLoading" @click="goPrevAccounts">上一页</button>
             <span class="muted">第 {{ accountPager.page }} 页<span v-if="accountTotalPages"> / 共 {{ accountTotalPages }} 页</span></span>
@@ -901,7 +909,10 @@ h3 { margin: 0 0 10px; font-size: 15px; }
 .error { color: #fecaca; }
 .form-block, .filter-grid, .modal-card { display: grid; gap: 14px; }
 .filter-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
-.group-filter { margin: 14px 0; padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(15, 23, 42, 0.46); }
+.filter-note { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin: 8px 0 12px; padding: 10px 12px; border-radius: 14px; background: rgba(37, 99, 235, 0.1); color: #cbd5e1; }
+.filter-note.compact { margin-top: 0; }
+.filter-note span { color: #94a3b8; font-size: 13px; }
+.local-filter { display: grid; gap: 12px; margin: 14px 0; padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(15, 23, 42, 0.46); }
 .group-filter-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; justify-content: space-between; }
 .group-add-row { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 10px; margin-top: 12px; align-items: center; }
 .group-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; margin-top: 12px; }
