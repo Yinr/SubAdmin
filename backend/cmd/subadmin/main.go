@@ -521,16 +521,9 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 	rankingQuery.Set("end_date", endDate)
 	rankingQuery.Set("limit", "12")
 	ranking, rankingStatus, rankingErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/dashboard/users-ranking", rankingQuery)
-	usersQuery := url.Values{}
-	usersQuery.Set("page", "1")
-	usersQuery.Set("page_size", "100")
-	usersQuery.Set("sort_by", "last_active_at")
-	usersQuery.Set("sort_order", "desc")
-	usersQuery.Set("include_subscriptions", "false")
-	usersConcurrency, usersConcurrencyStatus, usersConcurrencyErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/users", usersQuery)
 	userConcurrency, userConcurrencyStatus, userConcurrencyErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/ops/user-concurrency", nil)
 	opsConcurrency, opsConcurrencyStatus, opsConcurrencyErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/ops/concurrency", nil)
-	if snapshotErr != nil && statsErr != nil && rankingErr != nil && usersConcurrencyErr != nil && userConcurrencyErr != nil && opsConcurrencyErr != nil {
+	if snapshotErr != nil && statsErr != nil && rankingErr != nil && userConcurrencyErr != nil && opsConcurrencyErr != nil {
 		writeSiteError(w, snapshotErr)
 		return
 	}
@@ -541,8 +534,6 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 		"statsStatus":            statsStatus,
 		"ranking":                decodeJSONValue(ranking),
 		"rankingStatus":          rankingStatus,
-		"usersConcurrency":       projectUsersConcurrency(usersConcurrency),
-		"usersConcurrencyStatus": usersConcurrencyStatus,
 		"userConcurrency":        decodeJSONValue(userConcurrency),
 		"userConcurrencyStatus":  userConcurrencyStatus,
 		"opsConcurrency":         decodeJSONValue(opsConcurrency),
@@ -556,8 +547,7 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 			"官方管理仪表盘主页面使用 dashboard/snapshot-v2 聚合 stats、trend、models 和 users_trend。",
 			"snapshot-v2.stats 包含 active_users、hourly_active_users、rpm、tpm、today_account_cost、total_account_cost 等字段。",
 			"用户排行来自 dashboard/users-ranking；趋势、模型分布和用户趋势来自 snapshot-v2。",
-			"当前用户并发优先使用 Ops user-concurrency，依赖 sub2api Ops 实时监控开关。",
-			"最近活跃前 100 个用户的 current_concurrency 字段作为备用来源。",
+			"当前用户并发来自 Ops user-concurrency，依赖 sub2api Ops 实时监控开关。",
 			"账号并发来自 ops/concurrency，依赖 sub2api Ops 实时监控开关。",
 		},
 	}
@@ -570,9 +560,6 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 	if rankingErr != nil {
 		result["rankingError"] = rankingErr.Error()
 	}
-	if usersConcurrencyErr != nil {
-		result["usersConcurrencyError"] = usersConcurrencyErr.Error()
-	}
 	if userConcurrencyErr != nil {
 		result["userConcurrencyError"] = userConcurrencyErr.Error()
 	}
@@ -580,61 +567,6 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 		result["opsConcurrencyError"] = opsConcurrencyErr.Error()
 	}
 	writeJSON(w, http.StatusOK, result)
-}
-
-func projectUsersConcurrency(data []byte) any {
-	decoded := decodeJSONValue(data)
-	payload, ok := decoded.(map[string]any)
-	if !ok {
-		return decoded
-	}
-	items, _ := payload["items"].([]any)
-	projected := make([]map[string]any, 0, len(items))
-	active := make([]map[string]any, 0)
-	for _, item := range items {
-		user, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		row := map[string]any{
-			"user_id":             user["id"],
-			"email":               user["email"],
-			"username":            user["username"],
-			"status":              user["status"],
-			"current_concurrency": user["current_concurrency"],
-			"concurrency":         user["concurrency"],
-		}
-		projected = append(projected, row)
-		if numericValue(user["current_concurrency"]) > 0 {
-			active = append(active, row)
-		}
-	}
-	return map[string]any{
-		"source": "admin/users",
-		"items":  projected,
-		"active": active,
-		"total":  payload["total"],
-		"page":   payload["page"],
-		"pages":  payload["pages"],
-	}
-}
-
-func numericValue(value any) float64 {
-	switch v := value.(type) {
-	case float64:
-		return v
-	case float32:
-		return float64(v)
-	case int:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case string:
-		parsed, _ := strconv.ParseFloat(v, 64)
-		return parsed
-	default:
-		return 0
-	}
 }
 
 func decodeJSONValue(data []byte) any {

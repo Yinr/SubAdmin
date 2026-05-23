@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import ExpandablePanel from './components/ExpandablePanel.vue'
+import ConcurrencyTable from './components/ConcurrencyTable.vue'
 import StatsTable from './components/StatsTable.vue'
 
 type Site = {
@@ -243,17 +244,10 @@ const userConcurrency = computed(() => unwrapAPIData(statistics.value?.userConcu
 const opsConcurrency = computed(() => unwrapAPIData(statistics.value?.opsConcurrency))
 const currentUserConcurrency = computed(() => {
   const users = userConcurrency.value.user
-  if (users && typeof users === 'object') {
-    const opsUsers = Object.values(users as Record<string, Record<string, unknown>>)
-      .filter((user) => Number(user.current_in_use || 0) > 0 || Number(user.waiting_in_queue || 0) > 0)
-      .sort((a, b) => Number(b.current_in_use || 0) - Number(a.current_in_use || 0))
-    if (opsUsers.length) return opsUsers
-  }
-  const usersList = unwrapAPIData(statistics.value?.usersConcurrency)
-  if (!Array.isArray(usersList.active)) return []
-  return (usersList.active as Record<string, unknown>[])
-    .filter((user) => Number(user.current_concurrency || 0) > 0)
-    .sort((a, b) => Number(b.current_concurrency || 0) - Number(a.current_concurrency || 0))
+  if (!users || typeof users !== 'object') return []
+  return Object.values(users as Record<string, Record<string, unknown>>)
+    .filter((user) => Number(user.current_in_use || 0) > 0 || Number(user.waiting_in_queue || 0) > 0)
+    .sort((a, b) => Number(b.current_in_use || 0) - Number(a.current_in_use || 0))
 })
 const currentAccountConcurrency = computed(() => {
   const accounts = opsConcurrency.value.account
@@ -265,6 +259,11 @@ const currentAccountConcurrency = computed(() => {
 const accountConcurrencySummary = computed(() => currentAccountConcurrency.value.reduce((acc, account) => {
   acc.current += Number(account.current_in_use || 0)
   acc.waiting += Number(account.waiting_in_queue || 0)
+  return acc
+}, { current: 0, waiting: 0 }))
+const userConcurrencySummary = computed(() => currentUserConcurrency.value.reduce((acc, user) => {
+  acc.current += Number(user.current_in_use || 0)
+  acc.waiting += Number(user.waiting_in_queue || 0)
   return acc
 }, { current: 0, waiting: 0 }))
 const topModels = computed(() => statisticsModels.value.slice(0, 8))
@@ -755,24 +754,11 @@ function rankingWidth(user: Record<string, unknown>) {
   return usagePercentWidth(Number(user.actual_cost || 0) / maxRankingCost.value * 100)
 }
 
-function userCurrentConcurrency(user: Record<string, unknown>) {
-  return user.current_concurrency ?? user.current_in_use ?? 0
-}
-
-function userMaxConcurrency(user: Record<string, unknown>) {
-  return user.concurrency ?? user.max_capacity ?? '未知'
-}
-
-function userWaitingConcurrency(user: Record<string, unknown>) {
-  return user.waiting_in_queue ?? 0
-}
-
-function userConcurrencyLoad(user: Record<string, unknown>) {
-  if (user.load_percentage !== undefined) return `${user.load_percentage}%`
-  const current = Number(userCurrentConcurrency(user))
-  const max = Number(userMaxConcurrency(user))
-  if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) return '未知'
-  return `${Math.round(current / max * 100)}%`
+function concurrencyPercent(item: Record<string, unknown>) {
+  const current = Number(item.current_in_use || item.current_concurrency || 0)
+  const max = Number(item.max_capacity || item.concurrency || 0)
+  if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) return 0
+  return usagePercentWidth(current / max * 100)
 }
 
 function accountConcurrencyName(account: Record<string, unknown>) {
@@ -781,6 +767,10 @@ function accountConcurrencyName(account: Record<string, unknown>) {
 
 function accountConcurrencyCapacityTitle(account: Record<string, unknown>) {
   return `并发: ${statValue(account, 'current_in_use')}\n上限: ${statValue(account, 'max_capacity')}\n排队: ${statValue(account, 'waiting_in_queue')}`
+}
+
+function userConcurrencyCapacityTitle(user: Record<string, unknown>) {
+  return `并发: ${statValue(user, 'current_in_use')}\n上限: ${statValue(user, 'max_capacity')}\n排队: ${statValue(user, 'waiting_in_queue')}`
 }
 
 function accountStatusTagClass(key: string) {
@@ -1595,7 +1585,7 @@ onUnmounted(() => {
           </article>
         </div>
         <div class="stats-sections">
-          <ExpandablePanel title="请求与 Token 趋势">
+          <ExpandablePanel title="请求与 Token 趋势" panel-class="stats-section-trend">
             <template #meta><span class="muted">{{ statisticsSnapshot.start_date || statsRange.startDate }} 至 {{ statisticsSnapshot.end_date || statsRange.endDate }}</span></template>
             <div v-if="recentTrend.length" class="trend-panel">
               <div class="trend-chart-card">
@@ -1637,7 +1627,65 @@ onUnmounted(() => {
             </div>
             <p v-else class="muted">暂无趋势数据。</p>
           </ExpandablePanel>
-          <ExpandablePanel title="模型分布">
+          <ExpandablePanel title="当前用户并发" panel-class="stats-section-user-concurrency">
+            <template #meta><span class="muted" title="来自 /api/v1/admin/ops/user-concurrency。">{{ userConcurrencySummary.current }} 使用中 · {{ userConcurrencySummary.waiting }} 排队</span></template>
+            <p v-if="userConcurrency.enabled === false" class="muted">sub2api Ops 实时监控未开启，无法获取用户并发。</p>
+            <p v-else-if="statistics?.userConcurrencyError" class="error">{{ statistics.userConcurrencyError }}</p>
+            <ConcurrencyTable
+              v-else
+              name-label="用户"
+              value-label="容量"
+              empty-text="暂无用户并发数据。"
+              :rows="currentUserConcurrency"
+              :key-of="(row) => String(row.user_id ?? userDisplayName(row))"
+              :name-of="userDisplayName"
+              :value-of="(row) => `${statValue(row, 'current_in_use')} / ${statValue(row, 'max_capacity')}`"
+              :percent-of="concurrencyPercent"
+              :title-of="userConcurrencyCapacityTitle"
+            />
+          </ExpandablePanel>
+          <ExpandablePanel title="当前账号并发" panel-class="stats-section-account-concurrency">
+            <template #meta><span class="muted">{{ accountConcurrencySummary.current }} 使用中 · {{ accountConcurrencySummary.waiting }} 排队</span></template>
+            <p v-if="opsConcurrency.enabled === false" class="muted">sub2api Ops 实时监控未开启，无法获取账号并发。</p>
+            <p v-else-if="statistics?.opsConcurrencyError" class="error">{{ statistics.opsConcurrencyError }}</p>
+            <ConcurrencyTable
+              v-else
+              name-label="账号"
+              value-label="容量"
+              empty-text="暂无账号并发数据。"
+              :rows="currentAccountConcurrency"
+              :key-of="(row) => String(row.account_id ?? accountConcurrencyName(row))"
+              :name-of="accountConcurrencyName"
+              :value-of="(row) => `${statValue(row, 'current_in_use')} / ${statValue(row, 'max_capacity')}`"
+              :percent-of="concurrencyPercent"
+              :title-of="accountConcurrencyCapacityTitle"
+            />
+          </ExpandablePanel>
+          <ExpandablePanel title="用户消费排行" panel-class="stats-section-ranking">
+            <template #meta><span class="muted">{{ statisticsSnapshot.start_date || statsRange.startDate }} 至 {{ statisticsSnapshot.end_date || statsRange.endDate }}</span></template>
+            <StatsTable class="fit-table">
+              <table class="mini-table ranking-table">
+                <colgroup>
+                  <col class="name-col" />
+                  <col class="usage-col" />
+                </colgroup>
+                <thead>
+                  <tr><th>用户</th><th>用量</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="user in statisticsRanking" :key="String(user.user_id)">
+                    <td class="ranking-name">{{ userDisplayName(user) }}</td>
+                    <td class="ranking-usage">
+                      <div class="usage-bar-shell"><div class="usage-bar" :style="{ width: `${rankingWidth(user)}%` }"></div></div>
+                      <span>{{ statCost(user, 'actual_cost') }} <b>·</b> {{ tokenValue(user, 'tokens') }}</span>
+                    </td>
+                  </tr>
+                  <tr v-if="!statisticsRanking.length"><td colspan="2" class="muted">暂无用户排行数据。</td></tr>
+                </tbody>
+              </table>
+            </StatsTable>
+          </ExpandablePanel>
+          <ExpandablePanel title="模型分布" panel-class="stats-section-models">
             <template #meta><span class="muted">{{ statisticsSnapshot.start_date || statsRange.startDate }} 至 {{ statisticsSnapshot.end_date || statsRange.endDate }}</span></template>
             <StatsTable>
               <table class="mini-table">
@@ -1661,70 +1709,6 @@ onUnmounted(() => {
                 </tbody>
               </table>
             </StatsTable>
-          </ExpandablePanel>
-          <ExpandablePanel title="用户消费排行">
-            <template #meta><span class="muted">{{ statisticsSnapshot.start_date || statsRange.startDate }} 至 {{ statisticsSnapshot.end_date || statsRange.endDate }}</span></template>
-            <StatsTable class="fit-table">
-              <table class="mini-table ranking-table">
-                <colgroup>
-                  <col class="name-col" />
-                  <col class="usage-col" />
-                </colgroup>
-                <thead>
-                  <tr><th>用户</th><th>用量</th></tr>
-                </thead>
-                <tbody>
-                  <tr v-for="user in statisticsRanking" :key="String(user.user_id)">
-                    <td class="ranking-name">{{ userDisplayName(user) }}</td>
-                    <td class="ranking-usage">
-                      <div class="usage-bar-shell"><div class="usage-bar" :style="{ width: `${rankingWidth(user)}%` }"></div></div>
-                      <span>费用 {{ statCost(user, 'actual_cost') }}</span>
-                      <span>Tokens {{ tokenValue(user, 'tokens') }}</span>
-                    </td>
-                  </tr>
-                  <tr v-if="!statisticsRanking.length"><td colspan="2" class="muted">暂无用户排行数据。</td></tr>
-                </tbody>
-              </table>
-            </StatsTable>
-          </ExpandablePanel>
-          <ExpandablePanel title="当前账号并发">
-            <template #meta><span class="muted">{{ accountConcurrencySummary.current }} 使用中 · {{ accountConcurrencySummary.waiting }} 排队</span></template>
-            <p v-if="opsConcurrency.enabled === false" class="muted">sub2api Ops 实时监控未开启，无法获取账号并发。</p>
-            <p v-else-if="statistics?.opsConcurrencyError" class="error">{{ statistics.opsConcurrencyError }}</p>
-            <StatsTable v-else class="concurrency-scroll">
-              <table class="mini-table concurrency-table">
-                <colgroup><col class="concurrency-account-col" /><col class="concurrency-value-col" /></colgroup>
-                <thead><tr><th>账号</th><th title="并发 / 上限">容量</th></tr></thead>
-                <tbody>
-                  <tr v-for="account in currentAccountConcurrency" :key="String(account.account_id)">
-                    <td class="concurrency-name" :title="accountConcurrencyName(account)">{{ accountConcurrencyName(account) }}</td>
-                    <td class="concurrency-values" :title="accountConcurrencyCapacityTitle(account)">{{ statValue(account, 'current_in_use') }} / {{ statValue(account, 'max_capacity') }}</td>
-                  </tr>
-                  <tr v-if="!currentAccountConcurrency.length"><td colspan="2" class="muted">暂无账号并发数据。</td></tr>
-                </tbody>
-              </table>
-            </StatsTable>
-          </ExpandablePanel>
-          <ExpandablePanel title="当前用户并发">
-            <template #meta><span class="muted" title="优先来自 /api/v1/admin/ops/user-concurrency；无实时数据时回退到最近活跃前 100 个用户。">实时监控</span></template>
-            <p class="muted compact-note">数据优先来自 Ops 用户并发；无实时数据时回退到最近活跃前 100 个用户。</p>
-            <p v-if="statistics?.usersConcurrencyError && userConcurrency.enabled === false" class="muted">用户列表并发读取失败，且 sub2api Ops 实时监控未开启。</p>
-            <p v-else-if="statistics?.usersConcurrencyError && statistics?.userConcurrencyError" class="error">{{ statistics.usersConcurrencyError }}</p>
-            <div v-else-if="currentUserConcurrency.length" class="stats-table-wrap concurrency-scroll">
-              <table class="mini-table">
-                <thead><tr><th>用户</th><th>当前使用</th><th>排队</th><th>上限</th><th>负载</th></tr></thead>
-                <tbody>
-                  <tr v-for="user in currentUserConcurrency" :key="String(user.user_id)">
-                    <td class="concurrency-name" :title="userDisplayName(user)">{{ userDisplayName(user) }}</td>
-                    <td>{{ userCurrentConcurrency(user) }}</td>
-                    <td>{{ userWaitingConcurrency(user) }}</td>
-                    <td>{{ userMaxConcurrency(user) }}</td>
-                    <td>{{ userConcurrencyLoad(user) }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <p v-else class="muted">当前没有检测到正在使用的用户。</p>
           </ExpandablePanel>
         </div>
       </section>
@@ -2310,7 +2294,7 @@ onUnmounted(() => {
 .stat-panel-card strong { display: block; margin-top: 8px; color: #fff; font-size: 22px; }
 .stat-panel-card p { margin: 8px 0 0; }
 .stat-lines { display: grid; gap: 3px; }
-.stats-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 14px; }
+.stats-sections { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; }
 .trend-panel { display: grid; gap: 12px; }
 .trend-chart-card { display: grid; gap: 10px; }
 .trend-chart-frame { overflow: auto; border: 1px solid rgba(148, 163, 184, 0.12); border-radius: 14px; background: rgba(2, 6, 23, 0.2); }
@@ -2339,7 +2323,6 @@ onUnmounted(() => {
 .full-scroll .mini-table { min-width: 620px; table-layout: fixed; }
 .fit-table .mini-table { min-width: 320px; }
 .name-col { width: 28%; }
-.bar-col { width: 34%; }
 .num-col { width: 14%; }
 .money-col { width: 15%; }
 .name-cell, .ranking-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2348,16 +2331,11 @@ onUnmounted(() => {
 .ranking-table .usage-col { width: auto; }
 .ranking-usage { display: grid; gap: 6px; }
 .ranking-usage span { color: #94a3b8; font-size: 12px; }
+.ranking-usage b { color: #c4b5fd; font-size: 15px; line-height: 0; }
 .full-scroll::-webkit-scrollbar, .trend-chart-frame::-webkit-scrollbar { height: 10px; width: 10px; }
 .full-scroll::-webkit-scrollbar-track, .trend-chart-frame::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.45); border-radius: 999px; }
 .full-scroll::-webkit-scrollbar-thumb, .trend-chart-frame::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.34); border: 2px solid transparent; background-clip: padding-box; border-radius: 999px; }
 .full-scroll::-webkit-scrollbar-thumb:hover, .trend-chart-frame::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.5); border: 2px solid transparent; background-clip: padding-box; }
-.concurrency-scroll { max-height: 360px; overflow: auto; }
-.concurrency-scroll .mini-table { min-width: 320px; table-layout: fixed; }
-.concurrency-account-col { width: auto; }
-.concurrency-value-col { width: 96px; }
-.concurrency-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.concurrency-values { white-space: nowrap; }
 .status-chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .status-tag { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .status-tag-ok { background: rgba(34, 197, 94, 0.16); color: #86efac; }
@@ -2536,6 +2514,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .topbar { align-items: flex-start; flex-direction: column; }
   .topbar-actions { width: 100%; justify-content: flex-start; }
   .overview-card.wide, .stat-panel-card.wide-card { grid-column: auto; }
+  .stats-sections { grid-template-columns: 1fr; }
   .account-table { min-width: 960px; }
 }
 @media (max-width: 640px) {

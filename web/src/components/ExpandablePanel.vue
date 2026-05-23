@@ -3,6 +3,7 @@ import { onBeforeUnmount, watch } from 'vue'
 
 const props = defineProps<{
   title: string
+  panelClass?: string
 }>()
 
 const open = defineModel<boolean>({ default: false })
@@ -32,7 +33,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <article class="stats-section">
+  <article class="stats-section" :class="props.panelClass">
     <div class="panel-head compact-head expandable-head">
       <div>
         <h3>{{ props.title }}</h3>
@@ -65,6 +66,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .stats-section { min-width: 0; padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(15, 23, 42, 0.38); }
+.stats-section-trend { grid-column: span 6; }
+.stats-section-user-concurrency,
+.stats-section-account-concurrency { grid-column: span 3; }
+.stats-section-ranking { grid-column: span 5; }
+.stats-section-models { grid-column: span 7; }
 .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
 .compact-head { margin-bottom: 10px; }
 .compact-head h3 { margin: 0; font-size: 15px; }
@@ -90,5 +96,12 @@ onBeforeUnmount(() => {
 @media (max-width: 680px) {
   .panel-modal-backdrop { padding: 10px; }
   .panel-modal-card { min-height: calc(100vh - 20px); padding: 14px; border-radius: 16px; }
+}
+@media (max-width: 900px) {
+  .stats-section-trend,
+  .stats-section-user-concurrency,
+  .stats-section-account-concurrency,
+  .stats-section-ranking,
+  .stats-section-models { grid-column: auto; }
 }
 </style>
