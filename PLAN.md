@@ -62,7 +62,7 @@ The statistics page now covers the useful real data that sub2api exposes reliabl
 
 ## Next Priority: Persisted Jobs
 
-Status: design next, implementation after review.
+Status: initial implementation for `batch_account_test` is in progress.
 
 Persisted Jobs turn long or batch operations from front-end-only transient actions into server-tracked records. The immediate target is batch account testing; the same structure should later support batch refresh, import preview/execution, and higher-risk account operations.
 
@@ -141,12 +141,19 @@ Per-item results can start as JSON in `summary_json` for the first implementatio
 
 ### Implementation Steps
 
-1. Inspect current `jobs` schema and decide whether a migration is needed.
-2. Add a small backend job repository/service.
-3. Implement `batch_account_test` job creation, execution, progress updates, and detail retrieval.
-4. Update the frontend batch test flow to create a job and poll job status.
-5. Add retry-failed support by creating a new job from failed item ids.
-6. Add startup cleanup for interrupted jobs.
+1. Inspect current `jobs` schema and decide whether a migration is needed. Done: add `done_count` only.
+2. Add a small backend job repository/service. Done in the backend entrypoint for the first version.
+3. Implement `batch_account_test` job creation, execution, progress updates, and detail retrieval. Done for the first version.
+4. Update the frontend batch test flow to create a job and poll job status. Done for the first version.
+5. Add retry-failed support by creating a new job from failed item ids. Done for the first version.
+6. Add startup cleanup for interrupted jobs. Done for queued/running jobs.
+
+Next Jobs refinements:
+
+- Add a dedicated Jobs view if history usage becomes common.
+- Move job code out of `cmd/subadmin/main.go` if it grows beyond the current minimal implementation.
+- Add `job_items` only if result JSON becomes too large or hard to query.
+- Extend Jobs to batch token refresh after the batch-test path is validated.
 
 ## Later Planned Work
 
@@ -186,4 +193,4 @@ Status: ongoing.
 
 ## Immediate Next Step
 
-Design review complete, then implement the minimum persisted Jobs path for `batch_account_test`.
+Validate the minimum persisted Jobs path for `batch_account_test`, then decide whether to extend Jobs to batch token refresh or add a dedicated Jobs view.

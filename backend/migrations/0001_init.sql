@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   type TEXT NOT NULL,
   status TEXT NOT NULL,
   total_count INTEGER NOT NULL DEFAULT 0,
+  done_count INTEGER NOT NULL DEFAULT 0,
   success_count INTEGER NOT NULL DEFAULT 0,
   failed_count INTEGER NOT NULL DEFAULT 0,
   input_json TEXT NOT NULL DEFAULT '{}',

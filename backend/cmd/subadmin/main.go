@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"subadmin/internal/auth"
@@ -39,12 +40,17 @@ func main() {
 	defer store.Close()
 	authManager := auth.NewManager(store.DB(), cfg)
 	var siteService *sites.Service
+	var jobService *jobManager
 	if cfg.SecretKey != "" {
 		box, err := secretbox.New(cfg.SecretKey)
 		if err != nil {
 			log.Fatalf("init secret box: %v", err)
 		}
 		siteService = sites.NewService(store.DB(), box)
+		jobService = newJobManager(store.DB(), siteService, cfg.LogDir)
+		if err := jobService.markInterrupted(context.Background()); err != nil {
+			log.Printf("mark interrupted jobs: %v", err)
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -107,6 +113,8 @@ func main() {
 	})
 	mux.HandleFunc("/docs", protectedDocsHandler(authManager))
 	mux.HandleFunc("/docs/", protectedDocsHandler(authManager))
+	mux.HandleFunc("/api/jobs", jobsHandler(authManager, jobService))
+	mux.HandleFunc("/api/jobs/", jobDetailHandler(authManager, jobService))
 	mux.HandleFunc("/api/sites", func(w http.ResponseWriter, r *http.Request) {
 		if !requireAuth(w, r, authManager) {
 			return
@@ -192,6 +200,14 @@ func main() {
 				return
 			}
 			writeBatchAccountRefresh(w, r, siteService, id)
+			return
+		}
+		if action == "jobs/batch-account-test" {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeCreateBatchAccountTestJob(w, r, jobService, id)
 			return
 		}
 		if action == "groups" {
@@ -383,76 +399,524 @@ func writeSiteError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusBadRequest, err.Error())
 }
 
-func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64, logDir string) {
-	var input struct {
-		IDs     []int64 `json:"ids"`
-		ModelID string  `json:"modelId"`
-		Prompt  string  `json:"prompt"`
-		Mode    string  `json:"mode"`
-		Log     bool    `json:"logResponses"`
+type batchAccountTestInput struct {
+	IDs          []int64 `json:"ids"`
+	ModelID      string  `json:"modelId"`
+	Prompt       string  `json:"prompt"`
+	Mode         string  `json:"mode"`
+	DelayMs      int     `json:"delayMs"`
+	JitterMs     int     `json:"jitterMs"`
+	LogResponses bool    `json:"logResponses"`
+}
+
+type jobManager struct {
+	db          *sql.DB
+	siteService *sites.Service
+	logDir      string
+	mu          sync.Mutex
+	cancels     map[int64]context.CancelFunc
+}
+
+type jobRecord struct {
+	ID           int64           `json:"id"`
+	SiteID       *int64          `json:"siteId,omitempty"`
+	Type         string          `json:"type"`
+	Status       string          `json:"status"`
+	TotalCount   int             `json:"totalCount"`
+	DoneCount    int             `json:"doneCount"`
+	SuccessCount int             `json:"successCount"`
+	FailedCount  int             `json:"failedCount"`
+	Input        json.RawMessage `json:"input"`
+	Result       json.RawMessage `json:"result"`
+	Error        string          `json:"error,omitempty"`
+	CreatedAt    int64           `json:"createdAt"`
+	StartedAt    *int64          `json:"startedAt,omitempty"`
+	FinishedAt   *int64          `json:"finishedAt,omitempty"`
+}
+
+func newJobManager(db *sql.DB, siteService *sites.Service, logDir string) *jobManager {
+	return &jobManager{db: db, siteService: siteService, logDir: logDir, cancels: map[int64]context.CancelFunc{}}
+}
+
+func jobsHandler(authManager *auth.Manager, manager *jobManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireAuth(w, r, authManager) {
+			return
+		}
+		if manager == nil {
+			writeError(w, http.StatusServiceUnavailable, "SUBADMIN_SECRET_KEY is required for jobs")
+			return
+		}
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		items, err := manager.list(r.Context(), 50)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list jobs failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	}
+}
+
+func jobDetailHandler(authManager *auth.Manager, manager *jobManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireAuth(w, r, authManager) {
+			return
+		}
+		if manager == nil {
+			writeError(w, http.StatusServiceUnavailable, "SUBADMIN_SECRET_KEY is required for jobs")
+			return
+		}
+		id, action, ok := jobIDFromPath(r.URL.Path)
+		if !ok {
+			writeError(w, http.StatusNotFound, "job not found")
+			return
+		}
+		switch action {
+		case "":
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			job, err := manager.get(r.Context(), id)
+			if err != nil {
+				writeJobError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+		case "cancel":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			job, err := manager.cancel(r.Context(), id)
+			if err != nil {
+				writeJobError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, job)
+		case "retry-failed":
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			job, err := manager.retryFailed(r.Context(), id)
+			if err != nil {
+				writeJobError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusCreated, job)
+		default:
+			writeError(w, http.StatusNotFound, "job action not found")
+		}
+	}
+}
+
+func jobIDFromPath(path string) (int64, string, bool) {
+	rest := strings.TrimPrefix(path, "/api/jobs/")
+	parts := strings.SplitN(strings.Trim(rest, "/"), "/", 2)
+	if parts[0] == "" {
+		return 0, "", false
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		return 0, "", false
+	}
+	action := ""
+	if len(parts) == 2 {
+		action = strings.Trim(parts[1], "/")
+	}
+	return id, action, true
+}
+
+func writeJobError(w http.ResponseWriter, err error) {
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	writeError(w, http.StatusBadRequest, err.Error())
+}
+
+func writeCreateBatchAccountTestJob(w http.ResponseWriter, r *http.Request, manager *jobManager, siteID int64) {
+	if manager == nil {
+		writeError(w, http.StatusServiceUnavailable, "SUBADMIN_SECRET_KEY is required for jobs")
+		return
+	}
+	var input batchAccountTestInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
+	job, err := manager.createBatchAccountTest(r.Context(), siteID, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, job)
+}
+
+func (m *jobManager) createBatchAccountTest(ctx context.Context, siteID int64, input batchAccountTestInput) (*jobRecord, error) {
+	ids := cleanAccountIDs(input.IDs)
+	if len(ids) == 0 {
+		return nil, errors.New("ids is required")
+	}
+	input.IDs = ids
+	input.ModelID = strings.TrimSpace(input.ModelID)
+	input.Prompt = strings.TrimSpace(input.Prompt)
+	input.Mode = strings.TrimSpace(input.Mode)
+	if input.DelayMs < 0 {
+		input.DelayMs = 0
+	}
+	if input.JitterMs < 0 {
+		input.JitterMs = 0
+	}
+	inputJSON, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	res, err := m.db.ExecContext(ctx, `
+INSERT INTO jobs (site_id, type, status, total_count, done_count, success_count, failed_count, input_json, result_json, created_at)
+VALUES (?, 'batch_account_test', 'queued', ?, 0, 0, 0, ?, '{"items":[]}', ?)
+`, siteID, len(ids), string(inputJSON), now)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	m.startBatchAccountTest(id, siteID, input)
+	return m.get(ctx, id)
+}
+
+func (m *jobManager) startBatchAccountTest(jobID, siteID int64, input batchAccountTestInput) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.mu.Lock()
+	m.cancels[jobID] = cancel
+	m.mu.Unlock()
+	go func() {
+		defer func() {
+			m.mu.Lock()
+			delete(m.cancels, jobID)
+			m.mu.Unlock()
+		}()
+		m.runBatchAccountTest(ctx, jobID, siteID, input)
+	}()
+}
+
+func (m *jobManager) runBatchAccountTest(ctx context.Context, jobID, siteID int64, input batchAccountTestInput) {
+	now := time.Now().Unix()
+	_, _ = m.db.ExecContext(context.Background(), `UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?`, now, jobID)
+	items := make([]map[string]any, 0, len(input.IDs))
+	successCount := 0
+	failedCount := 0
+	for index, accountID := range input.IDs {
+		if ctx.Err() != nil {
+			_ = m.finishJob(jobID, "cancelled", items, successCount, failedCount, ctx.Err().Error())
+			return
+		}
+		if index > 0 && !waitForJobDelay(ctx, len(input.IDs), input.DelayMs, input.JitterMs) {
+			_ = m.finishJob(jobID, "cancelled", items, successCount, failedCount, context.Canceled.Error())
+			return
+		}
+		result := runAccountTest(ctx, m.siteService, m.logDir, siteID, accountID, input)
+		if result["ok"] == true {
+			successCount++
+		} else {
+			failedCount++
+		}
+		items = append(items, result)
+		_ = m.updateJobProgress(jobID, items, successCount, failedCount)
+	}
+	status := "succeeded"
+	if failedCount > 0 {
+		status = "failed"
+	}
+	_ = m.finishJob(jobID, status, items, successCount, failedCount, "")
+}
+
+func waitForJobDelay(ctx context.Context, totalCount, delayMs, jitterMs int) bool {
+	delay := delayMs
+	if delay < 0 {
+		delay = 0
+	}
+	floor := batchDelayFloor(totalCount)
+	if delay < floor {
+		delay = floor
+	}
+	if jitterMs > 0 {
+		delay += int(time.Now().UnixNano()%int64((jitterMs*2)+1)) - jitterMs
+		if delay < floor {
+			delay = floor
+		}
+	}
+	timer := time.NewTimer(time.Duration(delay) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func batchDelayFloor(totalCount int) int {
+	if totalCount > 100 {
+		return 1500
+	}
+	if totalCount > 50 {
+		return 1000
+	}
+	if totalCount > 20 {
+		return 600
+	}
+	return 0
+}
+
+func (m *jobManager) updateJobProgress(jobID int64, items []map[string]any, successCount, failedCount int) error {
+	resultJSON, err := json.Marshal(map[string]any{"items": items})
+	if err != nil {
+		return err
+	}
+	_, err = m.db.ExecContext(context.Background(), `
+UPDATE jobs SET done_count = ?, success_count = ?, failed_count = ?, result_json = ? WHERE id = ?
+`, len(items), successCount, failedCount, string(resultJSON), jobID)
+	return err
+}
+
+func (m *jobManager) finishJob(jobID int64, status string, items []map[string]any, successCount, failedCount int, errorMessage string) error {
+	resultJSON, err := json.Marshal(map[string]any{"items": items})
+	if err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	_, err = m.db.ExecContext(context.Background(), `
+UPDATE jobs SET status = ?, done_count = ?, success_count = ?, failed_count = ?, result_json = ?, error_message = ?, finished_at = ? WHERE id = ?
+`, status, len(items), successCount, failedCount, string(resultJSON), errorMessage, now, jobID)
+	return err
+}
+
+func (m *jobManager) list(ctx context.Context, limit int) ([]jobRecord, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := m.db.QueryContext(ctx, `
+SELECT id, site_id, type, status, total_count, done_count, success_count, failed_count, input_json, result_json, error_message, created_at, started_at, finished_at
+FROM jobs ORDER BY id DESC LIMIT ?
+`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []jobRecord{}
+	for rows.Next() {
+		item, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (m *jobManager) get(ctx context.Context, id int64) (*jobRecord, error) {
+	row := m.db.QueryRowContext(ctx, `
+SELECT id, site_id, type, status, total_count, done_count, success_count, failed_count, input_json, result_json, error_message, created_at, started_at, finished_at
+FROM jobs WHERE id = ?
+`, id)
+	item, err := scanJob(row)
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (m *jobManager) cancel(ctx context.Context, id int64) (*jobRecord, error) {
+	m.mu.Lock()
+	cancel := m.cancels[id]
+	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		return m.get(ctx, id)
+	}
+	now := time.Now().Unix()
+	res, err := m.db.ExecContext(ctx, `UPDATE jobs SET status = 'cancelled', error_message = 'cancelled', finished_at = ? WHERE id = ? AND status IN ('queued', 'running')`, now, id)
+	if err != nil {
+		return nil, err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		if _, err := m.get(ctx, id); err != nil {
+			return nil, err
+		}
+	}
+	return m.get(ctx, id)
+}
+
+func (m *jobManager) retryFailed(ctx context.Context, id int64) (*jobRecord, error) {
+	job, err := m.get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if job.Type != "batch_account_test" {
+		return nil, errors.New("job type cannot be retried")
+	}
+	var input batchAccountTestInput
+	if err := json.Unmarshal(job.Input, &input); err != nil {
+		return nil, err
+	}
+	failedIDs := failedIDsFromJobResult(job.Result)
+	if len(failedIDs) == 0 {
+		return nil, errors.New("job has no failed account ids")
+	}
+	if job.SiteID == nil {
+		return nil, errors.New("job has no site")
+	}
+	input.IDs = failedIDs
+	return m.createBatchAccountTest(ctx, *job.SiteID, input)
+}
+
+func (m *jobManager) markInterrupted(ctx context.Context) error {
+	now := time.Now().Unix()
+	_, err := m.db.ExecContext(ctx, `UPDATE jobs SET status = 'failed', error_message = 'interrupted by restart', finished_at = ? WHERE status IN ('queued', 'running')`, now)
+	return err
+}
+
+type jobScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanJob(row jobScanner) (jobRecord, error) {
+	var item jobRecord
+	var siteID sql.NullInt64
+	var startedAt, finishedAt sql.NullInt64
+	var inputJSON, resultJSON string
+	err := row.Scan(&item.ID, &siteID, &item.Type, &item.Status, &item.TotalCount, &item.DoneCount, &item.SuccessCount, &item.FailedCount, &inputJSON, &resultJSON, &item.Error, &item.CreatedAt, &startedAt, &finishedAt)
+	if err != nil {
+		return item, err
+	}
+	if siteID.Valid {
+		item.SiteID = &siteID.Int64
+	}
+	if startedAt.Valid {
+		item.StartedAt = &startedAt.Int64
+	}
+	if finishedAt.Valid {
+		item.FinishedAt = &finishedAt.Int64
+	}
+	item.Input = json.RawMessage(inputJSON)
+	item.Result = json.RawMessage(resultJSON)
+	return item, nil
+}
+
+func failedIDsFromJobResult(raw json.RawMessage) []int64 {
+	var payload struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	ids := []int64{}
+	for _, item := range payload.Items {
+		if item["ok"] == true {
+			continue
+		}
+		switch value := item["id"].(type) {
+		case float64:
+			ids = append(ids, int64(value))
+		case string:
+			if parsed, err := strconv.ParseInt(value, 10, 64); err == nil {
+				ids = append(ids, parsed)
+			}
+		}
+	}
+	return cleanAccountIDs(ids)
+}
+
+func cleanAccountIDs(ids []int64) []int64 {
+	result := make([]int64, 0, len(ids))
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		result = append(result, id)
+	}
+	return result
+}
+
+func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64, logDir string) {
+	var input batchAccountTestInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	input.IDs = cleanAccountIDs(input.IDs)
 	if len(input.IDs) == 0 {
 		writeError(w, http.StatusBadRequest, "ids is required")
 		return
 	}
 	results := make([]map[string]any, 0, len(input.IDs))
 	for _, accountID := range input.IDs {
-		if accountID <= 0 {
-			results = append(results, map[string]any{"id": accountID, "ok": false, "error": "invalid account id"})
-			continue
-		}
-		started := time.Now()
-		data, statusCode, err := siteService.AdminPOSTJSON(r.Context(), siteID, fmt.Sprintf("/api/v1/admin/accounts/%d/test", accountID), map[string]any{
-			"model_id": strings.TrimSpace(input.ModelID),
-			"prompt":   strings.TrimSpace(input.Prompt),
-			"mode":     strings.TrimSpace(input.Mode),
-		})
-		result := map[string]any{
-			"id":         accountID,
-			"statusCode": statusCode,
-			"durationMs": time.Since(started).Milliseconds(),
-		}
-		if err != nil {
-			result["ok"] = false
-			result["error"] = err.Error()
-			if hint, resetAt := parseKnownTestHint(err.Error()); hint != "" {
-				result["hint"] = hint
-				if resetAt != "" {
-					result["resetAt"] = resetAt
-				}
-			}
-		} else {
-			sanitizedBody := string(sanitizeJSONForBrowser(data))
-			ok, message, model, hint, resetAt := summarizeAccountTestSSE(sanitizedBody)
-			result["ok"] = ok
-			result["message"] = message
-			if hint != "" {
-				result["hint"] = hint
-			} else if ok {
-				result["hint"] = "正常"
-			}
+		results = append(results, runAccountTest(r.Context(), siteService, logDir, siteID, accountID, input))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": results})
+}
+
+func runAccountTest(ctx context.Context, siteService *sites.Service, logDir string, siteID, accountID int64, input batchAccountTestInput) map[string]any {
+	started := time.Now()
+	data, statusCode, err := siteService.AdminPOSTJSON(ctx, siteID, fmt.Sprintf("/api/v1/admin/accounts/%d/test", accountID), map[string]any{
+		"model_id": strings.TrimSpace(input.ModelID),
+		"prompt":   strings.TrimSpace(input.Prompt),
+		"mode":     strings.TrimSpace(input.Mode),
+	})
+	result := map[string]any{
+		"id":         accountID,
+		"statusCode": statusCode,
+		"durationMs": time.Since(started).Milliseconds(),
+	}
+	if err != nil {
+		result["ok"] = false
+		result["error"] = err.Error()
+		if hint, resetAt := parseKnownTestHint(err.Error()); hint != "" {
+			result["hint"] = hint
 			if resetAt != "" {
 				result["resetAt"] = resetAt
 			}
-			if model != "" {
-				result["model"] = model
-			}
-			result["body"] = sanitizedBody
-			if input.Log {
-				if path, err := writeBatchTestLog(logDir, siteID, accountID, sanitizedBody); err == nil {
-					result["logPath"] = path
-				} else {
-					result["logError"] = err.Error()
-				}
-			}
 		}
-		results = append(results, result)
+		return result
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": results})
+	sanitizedBody := string(sanitizeJSONForBrowser(data))
+	ok, message, model, hint, resetAt := summarizeAccountTestSSE(sanitizedBody)
+	result["ok"] = ok
+	result["message"] = message
+	if hint != "" {
+		result["hint"] = hint
+	} else if ok {
+		result["hint"] = "正常"
+	}
+	if resetAt != "" {
+		result["resetAt"] = resetAt
+	}
+	if model != "" {
+		result["model"] = model
+	}
+	result["body"] = sanitizedBody
+	if input.LogResponses {
+		if path, err := writeBatchTestLog(logDir, siteID, accountID, sanitizedBody); err == nil {
+			result["logPath"] = path
+		} else {
+			result["logError"] = err.Error()
+		}
+	}
+	return result
 }
 
 func writeBatchAccountRefresh(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
@@ -528,16 +992,16 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 		return
 	}
 	result := map[string]any{
-		"snapshot":               decodeJSONValue(snapshot),
-		"snapshotStatus":         snapshotStatus,
-		"stats":                  decodeJSONValue(stats),
-		"statsStatus":            statsStatus,
-		"ranking":                decodeJSONValue(ranking),
-		"rankingStatus":          rankingStatus,
-		"userConcurrency":        decodeJSONValue(userConcurrency),
-		"userConcurrencyStatus":  userConcurrencyStatus,
-		"opsConcurrency":         decodeJSONValue(opsConcurrency),
-		"opsConcurrencyStatus":   opsConcurrencyStatus,
+		"snapshot":              decodeJSONValue(snapshot),
+		"snapshotStatus":        snapshotStatus,
+		"stats":                 decodeJSONValue(stats),
+		"statsStatus":           statsStatus,
+		"ranking":               decodeJSONValue(ranking),
+		"rankingStatus":         rankingStatus,
+		"userConcurrency":       decodeJSONValue(userConcurrency),
+		"userConcurrencyStatus": userConcurrencyStatus,
+		"opsConcurrency":        decodeJSONValue(opsConcurrency),
+		"opsConcurrencyStatus":  opsConcurrencyStatus,
 		"range": map[string]string{
 			"start_date":  startDate,
 			"end_date":    endDate,

@@ -18,6 +18,7 @@ type Site = {
 
 type Account = Record<string, unknown>
 type Group = Record<string, unknown>
+type JobRecord = Record<string, unknown>
 type GroupState = 'any' | 'include' | 'exclude'
 type ViewMode = 'stats' | 'accounts' | 'sites' | 'docs'
 type ApiOptions = RequestInit & { timeoutMs?: number }
@@ -39,6 +40,7 @@ const groups = ref<Group[]>([])
 const batchTestResults = ref<Record<string, unknown>[]>([])
 const batchRefreshResult = ref<Record<string, unknown> | null>(null)
 const statistics = ref<Record<string, unknown> | null>(null)
+const batchTestJob = ref<JobRecord | null>(null)
 const batchTestScroll = ref<HTMLElement | null>(null)
 const batchRefreshScroll = ref<HTMLElement | null>(null)
 const selectedAccountIds = ref<Set<string>>(new Set())
@@ -76,6 +78,7 @@ const filteredAccountIDsCache = new Map<string, number[]>()
 const accountAbortController = ref<AbortController | null>(null)
 let accountQueryTimer: number | null = null
 let accountQueryCancelled = false
+let batchTestPollTimer: number | null = null
 
 const siteForm = reactive({
   name: '',
@@ -1373,18 +1376,14 @@ async function testAccountIDs(ids: number[]) {
   batchTestTotal.value = ids.length
   batchTestDone.value = 0
   batchTesting.value = true
+  batchTestJob.value = null
   try {
-    for (const [index, id] of ids.entries()) {
-      if (index > 0) await waitForBatchDelay(ids.length)
-      batchTestResults.value = [...batchTestResults.value, { id, pending: true, message: '检测中...' }]
-      const payload = await api<{ items: Record<string, unknown>[] }>(`api/sites/${activeSiteId.value}/accounts`, {
-        method: 'POST',
-        body: JSON.stringify({ ids: [id], ...batchTestForm }),
-      })
-      const result = payload.items?.[0] || { id, ok: false, error: '无检测结果' }
-      batchTestResults.value = batchTestResults.value.map((item) => String(item.id) === String(id) ? result : item)
-      batchTestDone.value += 1
-    }
+    batchTestResults.value = ids.map((id) => ({ id, pending: true, message: '等待检测...' }))
+    const job = await api<JobRecord>(`api/sites/${activeSiteId.value}/jobs/batch-account-test`, {
+      method: 'POST',
+      body: JSON.stringify({ ids, ...batchTestForm }),
+    })
+    await pollBatchTestJob(Number(job.id))
   } catch (error) {
     batchTestError.value = error instanceof Error ? error.message : '批量检测失败'
   } finally {
@@ -1392,20 +1391,67 @@ async function testAccountIDs(ids: number[]) {
   }
 }
 
-function waitForBatchDelay(totalCount: number) {
-  const base = Math.max(0, Number(batchTestForm.delayMs) || 0)
-  const jitter = Math.max(0, Number(batchTestForm.jitterMs) || 0)
-  const floor = getBatchDelayFloor(totalCount)
-  const offset = jitter ? Math.round((Math.random() * 2 - 1) * jitter) : 0
-  const delay = Math.max(floor, base + offset)
-  return new Promise((resolve) => window.setTimeout(resolve, delay))
+async function pollBatchTestJob(jobId: number) {
+  stopBatchTestPollTimer()
+  while (batchTesting.value) {
+    const job = await api<JobRecord>(`api/jobs/${jobId}`)
+    updateBatchTestJob(job)
+    if (!['queued', 'running'].includes(String(job.status))) return
+    await waitForBatchPoll()
+  }
 }
 
-function getBatchDelayFloor(totalCount: number) {
-  if (totalCount > 100) return 1500
-  if (totalCount > 50) return 1000
-  if (totalCount > 20) return 600
-  return 0
+async function cancelBatchTestJob() {
+  const id = Number(batchTestJob.value?.id)
+  if (!id) return
+  try {
+    const job = await api<JobRecord>(`api/jobs/${id}/cancel`, { method: 'POST', body: '{}' })
+    updateBatchTestJob(job)
+  } catch (error) {
+    batchTestError.value = error instanceof Error ? error.message : '取消批量检测失败'
+  } finally {
+    batchTesting.value = false
+    stopBatchTestPollTimer()
+  }
+}
+
+async function retryFailedBatchJob() {
+  const id = Number(batchTestJob.value?.id)
+  if (!id) return
+  batchTestError.value = ''
+  batchTesting.value = true
+  try {
+    const job = await api<JobRecord>(`api/jobs/${id}/retry-failed`, { method: 'POST', body: '{}' })
+    batchTestResults.value = failedBatchTestIDs.value.map((accountId) => ({ id: accountId, pending: true, message: '等待检测...' }))
+    await pollBatchTestJob(Number(job.id))
+  } catch (error) {
+    batchTestError.value = error instanceof Error ? error.message : '重试失败项失败'
+  } finally {
+    batchTesting.value = false
+  }
+}
+
+function updateBatchTestJob(job: JobRecord) {
+  batchTestJob.value = job
+  batchTestTotal.value = Number(job.totalCount || batchTestTotal.value || 0)
+  batchTestDone.value = Number(job.doneCount || 0)
+  const result = job.result as Record<string, unknown> | undefined
+  const items = Array.isArray(result?.items) ? result.items as Record<string, unknown>[] : []
+  if (items.length) {
+    const itemMap = new Map(items.map((item) => [String(item.id), item]))
+    batchTestResults.value = batchTestResults.value.map((item) => itemMap.get(String(item.id)) || item)
+  }
+}
+
+function waitForBatchPoll() {
+  return new Promise((resolve) => {
+    batchTestPollTimer = window.setTimeout(resolve, 1200)
+  })
+}
+
+function stopBatchTestPollTimer() {
+  if (batchTestPollTimer) window.clearTimeout(batchTestPollTimer)
+  batchTestPollTimer = null
 }
 
 function isBatchResultPending(result: Record<string, unknown>) {
@@ -1446,6 +1492,10 @@ function scrollToBottom(el: HTMLElement | null) {
 
 async function retryFailedBatchTests() {
   if (!failedBatchTestIDs.value.length) return
+  if (batchTestJob.value?.id) {
+    await retryFailedBatchJob()
+    return
+  }
   selectedAccountIds.value = new Set(failedBatchTestIDs.value.map((id) => String(id)))
   await testSelectedAccounts()
 }
@@ -1488,6 +1538,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   stopAccountQueryTimer()
+  stopBatchTestPollTimer()
   accountAbortController.value?.abort()
   document.removeEventListener('click', handleDocumentClick, true)
 })
@@ -1934,7 +1985,8 @@ onUnmounted(() => {
             </div>
           </details>
           <p v-if="batchCollecting" class="muted">正在按当前筛选条件分页收集账号 ID...</p>
-          <p v-if="batchTesting" class="muted">正在检测 {{ selectedAccountCount }} 个账号；每个账号完成后会更新一行结果。大批量会自动提高最小间隔。</p>
+          <p v-if="batchTesting" class="muted">正在执行批量检测 Job；每个账号完成后会更新一行结果。大批量会自动提高最小间隔。</p>
+          <p v-if="batchTestJob" class="muted">Job #{{ batchTestJob.id }} · {{ batchTestJob.status }} · {{ batchTestDone }} / {{ batchTestTotal }} 完成</p>
           <p v-if="batchRefreshing" class="muted">正在刷新账号 OAuth 令牌；sub2api 批量刷新接口会修改上游账号凭证。</p>
           <p v-if="batchTestError" class="error">{{ batchTestError }}</p>
           <p v-if="batchRefreshError" class="error">{{ batchRefreshError }}</p>
@@ -1947,6 +1999,7 @@ onUnmounted(() => {
               </div>
               <div class="actions compact-actions">
                 <button class="secondary" @click="copyText(JSON.stringify(batchTestResults, null, 2), '检测结果')">复制结果</button>
+                <button class="secondary" :disabled="!batchTesting || !batchTestJob" @click="cancelBatchTestJob">取消 Job</button>
                 <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="copyFailedBatchTestIDs">复制失败账号 ID</button>
                 <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="retryFailedBatchTests">只重试失败项</button>
               </div>
