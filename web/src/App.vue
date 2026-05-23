@@ -20,7 +20,7 @@ type Account = Record<string, unknown>
 type Group = Record<string, unknown>
 type JobRecord = Record<string, unknown>
 type GroupState = 'any' | 'include' | 'exclude'
-type ViewMode = 'stats' | 'accounts' | 'sites' | 'docs'
+type ViewMode = 'stats' | 'accounts' | 'jobs' | 'sites' | 'docs'
 type ApiOptions = RequestInit & { timeoutMs?: number }
 
 const authed = ref(false)
@@ -401,6 +401,11 @@ async function showDocs() {
 async function showStats() {
   activeView.value = 'stats'
   await loadStatistics()
+}
+
+async function showJobs() {
+  activeView.value = 'jobs'
+  await loadRecentJobs()
 }
 
 async function loadStatistics() {
@@ -866,7 +871,7 @@ async function loadRecentJobs() {
     const payload = await api<{ items: JobRecord[] }>('api/jobs')
     recentJobs.value = (payload.items || []).slice(0, 10)
   } catch (error) {
-    batchTestError.value = error instanceof Error ? error.message : '加载 Jobs 失败'
+    batchTestError.value = error instanceof Error ? error.message : '加载任务失败'
   } finally {
     jobsLoading.value = false
   }
@@ -1288,7 +1293,15 @@ function accountProxyRows(account: Account) {
 
 function formatDateTime(value: unknown) {
   if (!value) return '未知'
-  const date = new Date(String(value))
+  let date: Date
+  if (typeof value === 'number') {
+    date = new Date(value < 1_000_000_000_000 ? value * 1000 : value)
+  } else if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    const numeric = Number(value)
+    date = new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric)
+  } else {
+    date = new Date(String(value))
+  }
   if (Number.isNaN(date.getTime())) return String(value)
   return date.toLocaleString('zh-CN', { hour12: false })
 }
@@ -1431,7 +1444,7 @@ async function openJobResult(job: JobRecord) {
     batchTestTotal.value = Number(detail.totalCount || items.length || 0)
     batchTestDone.value = Number(detail.doneCount || items.length || 0)
   } catch (error) {
-    batchTestError.value = error instanceof Error ? error.message : '加载 Job 详情失败'
+    batchTestError.value = error instanceof Error ? error.message : '加载任务详情失败'
   }
 }
 
@@ -1626,6 +1639,7 @@ onUnmounted(() => {
         <div class="topbar-actions">
           <button :class="activeView === 'stats' ? '' : 'secondary'" @click="showStats">统计</button>
           <button :class="activeView === 'accounts' ? '' : 'secondary'" @click="activeView = 'accounts'">账号</button>
+          <button :class="activeView === 'jobs' ? '' : 'secondary'" @click="showJobs">任务</button>
           <button :class="activeView === 'sites' ? '' : 'secondary'" @click="activeView = 'sites'">站点</button>
           <button :class="activeView === 'docs' ? '' : 'secondary'" @click="showDocs">文档</button>
           <button class="secondary" @click="logout">退出登录</button>
@@ -1821,6 +1835,80 @@ onUnmounted(() => {
             </StatsTable>
           </ExpandablePanel>
         </div>
+      </section>
+
+      <section v-else-if="activeView === 'jobs'" class="panel content-panel">
+        <div class="panel-head">
+          <div>
+            <h2>任务</h2>
+            <p class="muted">统一查看批量任务历史、进度、结果和失败重试。当前已接入批量账号检测。</p>
+          </div>
+          <button class="secondary" :disabled="jobsLoading" @click="loadRecentJobs">{{ jobsLoading ? '加载中...' : '刷新任务' }}</button>
+        </div>
+        <p v-if="batchTestError" class="error">{{ batchTestError }}</p>
+        <section class="batch-results result-panel">
+          <div class="panel-head">
+            <div>
+              <h2>最近任务</h2>
+              <p class="muted">展示最近 10 个任务；点击查看结果可恢复批量检测明细。</p>
+            </div>
+          </div>
+          <div class="result-scroll table-wrap jobs-scroll">
+            <table class="account-table result-table">
+              <thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>结果</th><th>创建时间</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr v-for="job in recentJobs" :key="String(job.id)">
+                  <td>#{{ job.id }}</td>
+                  <td>{{ jobTypeLabel(job.type) }}</td>
+                  <td>{{ jobStatusLabel(job.status) }}</td>
+                  <td>
+                    <div class="usage-row compact-progress">
+                      <div class="usage-bar-shell"><div class="usage-bar" :style="{ width: `${jobProgress(job)}%` }"></div></div>
+                      <strong class="usage-value">{{ job.doneCount || 0 }} / {{ job.totalCount || 0 }}</strong>
+                    </div>
+                  </td>
+                  <td>{{ job.successCount || 0 }} 成功 / {{ job.failedCount || 0 }} 失败</td>
+                  <td>{{ formatDateTime(job.createdAt) }}</td>
+                  <td class="row-actions">
+                    <button class="secondary mini" @click="openJobResult(job)">查看结果</button>
+                    <button class="secondary mini" :disabled="Number(job.failedCount || 0) <= 0 || batchTesting" @click="retryFailedJobFromList(job)">重试失败</button>
+                  </td>
+                </tr>
+                <tr v-if="!recentJobs.length"><td colspan="7" class="muted">暂无任务记录。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section v-if="batchTestResults.length" class="batch-results result-panel">
+          <div class="panel-head">
+            <div>
+              <h2>任务结果</h2>
+              <p class="muted"><span v-if="batchTestJob">任务 #{{ batchTestJob.id }} · {{ jobStatusLabel(batchTestJob.status) }} · </span>{{ batchTestDone }} / {{ batchTestTotal || batchTestResults.length }} 完成</p>
+            </div>
+            <div class="actions compact-actions">
+              <button class="secondary" @click="copyText(JSON.stringify(batchTestResults, null, 2), '检测结果')">复制结果</button>
+              <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="copyFailedBatchTestIDs">复制失败账号 ID</button>
+              <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="retryFailedBatchTests">只重试失败项</button>
+            </div>
+          </div>
+          <div class="progress-track"><div class="progress-bar" :style="{ width: `${batchTestProgress}%` }"></div></div>
+          <div ref="batchTestScroll" class="result-scroll table-wrap">
+            <table class="account-table result-table">
+              <thead><tr><th>账号 ID</th><th>结果</th><th>模型</th><th>HTTP</th><th>耗时</th><th>提示</th><th>详情</th></tr></thead>
+              <tbody>
+                <tr v-for="result in batchTestResults" :key="String(result.id)">
+                  <td>{{ result.id }}</td>
+                  <td>{{ batchResultLabel(result) }}</td>
+                  <td>{{ result.model || '未知' }}</td>
+                  <td>{{ result.statusCode || '未知' }}</td>
+                  <td>{{ result.durationMs ?? '未知' }} ms</td>
+                  <td>{{ batchResultHint(result) }}</td>
+                  <td><button class="secondary mini" type="button" :title="batchResultSummary(result)" @click="openBatchTestDetail(result)">查看详情</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
       <section v-else-if="activeView === 'docs'" class="panel docs-panel">
@@ -2044,8 +2132,8 @@ onUnmounted(() => {
             </div>
           </details>
           <p v-if="batchCollecting" class="muted">正在按当前筛选条件分页收集账号 ID...</p>
-          <p v-if="batchTesting" class="muted">正在执行批量检测 Job；每个账号完成后会更新一行结果。大批量会自动提高最小间隔。</p>
-          <p v-if="batchTestJob" class="muted">Job #{{ batchTestJob.id }} · {{ batchTestJob.status }} · {{ batchTestDone }} / {{ batchTestTotal }} 完成</p>
+          <p v-if="batchTesting" class="muted">正在执行批量检测任务；每个账号完成后会更新一行结果。大批量会自动提高最小间隔。</p>
+          <p v-if="batchTestJob" class="muted">任务 #{{ batchTestJob.id }} · {{ jobStatusLabel(batchTestJob.status) }} · {{ batchTestDone }} / {{ batchTestTotal }} 完成 <button type="button" class="mini" @click="showJobs">查看任务</button></p>
           <p v-if="batchRefreshing" class="muted">正在刷新账号 OAuth 令牌；sub2api 批量刷新接口会修改上游账号凭证。</p>
           <p v-if="batchTestError" class="error">{{ batchTestError }}</p>
           <p v-if="batchRefreshError" class="error">{{ batchRefreshError }}</p>
@@ -2058,7 +2146,7 @@ onUnmounted(() => {
               </div>
               <div class="actions compact-actions">
                 <button class="secondary" @click="copyText(JSON.stringify(batchTestResults, null, 2), '检测结果')">复制结果</button>
-                <button class="secondary" :disabled="!batchTesting || !batchTestJob" @click="cancelBatchTestJob">取消 Job</button>
+                <button class="secondary" :disabled="!batchTesting || !batchTestJob" @click="cancelBatchTestJob">取消任务</button>
                 <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="copyFailedBatchTestIDs">复制失败账号 ID</button>
                 <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="retryFailedBatchTests">只重试失败项</button>
               </div>
@@ -2083,42 +2171,6 @@ onUnmounted(() => {
                       <button class="secondary mini" type="button" :title="batchResultSummary(result)" @click="openBatchTestDetail(result)">查看详情</button>
                     </td>
                   </tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
-          <section class="batch-results result-panel">
-            <div class="panel-head">
-              <div>
-                <h2>最近 Jobs</h2>
-                <p class="muted">展示最近 10 个批量任务，刷新页面后也可回看结果。</p>
-              </div>
-              <div class="actions compact-actions">
-                <button class="secondary" :disabled="jobsLoading" @click="loadRecentJobs">{{ jobsLoading ? '加载中...' : '刷新 Jobs' }}</button>
-              </div>
-            </div>
-            <div class="result-scroll table-wrap jobs-scroll">
-              <table class="account-table result-table">
-                <thead><tr><th>Job</th><th>类型</th><th>状态</th><th>进度</th><th>结果</th><th>创建时间</th><th>操作</th></tr></thead>
-                <tbody>
-                  <tr v-for="job in recentJobs" :key="String(job.id)">
-                    <td>#{{ job.id }}</td>
-                    <td>{{ jobTypeLabel(job.type) }}</td>
-                    <td>{{ jobStatusLabel(job.status) }}</td>
-                    <td>
-                      <div class="usage-row compact-progress">
-                        <div class="usage-bar-shell"><div class="usage-bar" :style="{ width: `${jobProgress(job)}%` }"></div></div>
-                        <strong class="usage-value">{{ job.doneCount || 0 }} / {{ job.totalCount || 0 }}</strong>
-                      </div>
-                    </td>
-                    <td>{{ job.successCount || 0 }} 成功 / {{ job.failedCount || 0 }} 失败</td>
-                    <td>{{ formatDateTime(Number(job.createdAt || 0) * 1000) }}</td>
-                    <td class="row-actions">
-                      <button class="secondary mini" @click="openJobResult(job)">查看结果</button>
-                      <button class="secondary mini" :disabled="Number(job.failedCount || 0) <= 0 || batchTesting" @click="retryFailedJobFromList(job)">重试失败</button>
-                    </td>
-                  </tr>
-                  <tr v-if="!recentJobs.length"><td colspan="7" class="muted">暂无 Job 记录。</td></tr>
                 </tbody>
               </table>
             </div>

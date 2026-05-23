@@ -41,5 +41,5 @@ This directory contains the management application for sub2api.
 - Multi-site switching.
 - Account listing, filtering, batch testing, and batch token refresh.
 - Statistics dashboard based on real upstream dashboard and Ops data.
-- Persisted Jobs design and implementation for batch workflows.
+- Persisted task design and implementation for batch workflows.
 - Protected docs page for logged-in users.

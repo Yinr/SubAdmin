@@ -148,9 +148,12 @@ Per-item results can start as JSON in `summary_json` for the first implementatio
 5. Add retry-failed support by creating a new job from failed item ids. Done for the first version.
 6. Add startup cleanup for interrupted jobs. Done for queued/running jobs.
 
+Current Jobs refinements:
+
+- A dedicated top-level Jobs view shows recent batch jobs and can reopen batch-test results.
+
 Next Jobs refinements:
 
-- Add a dedicated Jobs view if history usage becomes common.
 - Move job code out of `cmd/subadmin/main.go` if it grows beyond the current minimal implementation.
 - Add `job_items` only if result JSON becomes too large or hard to query.
 - Extend Jobs to batch token refresh after the batch-test path is validated.
@@ -193,4 +196,4 @@ Status: ongoing.
 
 ## Immediate Next Step
 
-Validate the minimum persisted Jobs path for `batch_account_test`, then decide whether to extend Jobs to batch token refresh or add a dedicated Jobs view.
+Validate the top-level Jobs view, then extend Jobs to batch token refresh.
