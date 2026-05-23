@@ -61,6 +61,10 @@ x-api-key: admin-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 | POST | `/api/v1/admin/settings/admin-api-key/regenerate` | 轮换管理员 Key，旧 Key 失效 |
 | DELETE | `/api/v1/admin/settings/admin-api-key` | 删除管理员 Key，Key 认证失效 |
 
+## 运行说明
+
+SubAdmin 的批量测试响应日志默认不保存。若显式开启保存，日志应写入由 `SUBADMIN_LOG_DIR` 指定的项目根目录日志目录。
+
 ## Endpoint Inventory
 
 ### Dashboard

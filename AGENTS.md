@@ -22,6 +22,7 @@ This directory contains the management application for sub2api.
 - Vue 3 frontend is built as static assets and served by the Go backend.
 - SQLite stores sites, sessions, app settings, templates, jobs, and audit logs.
 - API docs under `subAdmin/docs` are a source of truth and can be embedded into the app.
+- Batch test response logs are opt-in only and should use the project-root log directory configured by `SUBADMIN_LOG_DIR`.
 
 ## Security Rules
 - Never send the `sub2api` admin key to the browser.

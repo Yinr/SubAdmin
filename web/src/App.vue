@@ -103,7 +103,7 @@ const batchTestForm = reactive({
   mode: '',
   delayMs: 0,
   jitterMs: 0,
-  logResponses: true,
+  logResponses: false,
 })
 
 const scheduleQuickFilter = ref('all')
@@ -1920,7 +1920,7 @@ onUnmounted(() => {
                   </label>
                   <label>基础间隔(ms)<input v-model.number="batchTestForm.delayMs" type="number" min="0" step="100" /></label>
                   <label>随机抖动(ms)<input v-model.number="batchTestForm.jitterMs" type="number" min="0" step="100" /></label>
-                  <label class="inline-check"><input v-model="batchTestForm.logResponses" type="checkbox" /> 临时记录响应日志</label>
+                  <label class="inline-check"><input v-model="batchTestForm.logResponses" type="checkbox" /> 保存响应日志到日志目录</label>
                 </div>
               </details>
               <details class="advanced-block danger-block">

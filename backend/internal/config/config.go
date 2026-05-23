@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -9,6 +10,7 @@ import (
 type Config struct {
 	Addr         string
 	DBPath       string
+	LogDir       string
 	LoginSecret  string
 	SecretKey    string
 	BasePath     string
@@ -27,6 +29,12 @@ func Load() Config {
 	if dbPath == "" {
 		dbPath = "../data/subadmin.db"
 	}
+
+	logDir := os.Getenv("SUBADMIN_LOG_DIR")
+	if logDir == "" {
+		logDir = "data/logs"
+	}
+	logDir = resolveProjectRelativePath(logDir)
 
 	basePath := normalizeBasePath(os.Getenv("SUBADMIN_BASE_PATH"))
 
@@ -47,6 +55,7 @@ func Load() Config {
 	return Config{
 		Addr:         addr,
 		DBPath:       dbPath,
+		LogDir:       logDir,
 		LoginSecret:  os.Getenv("SUBADMIN_LOGIN_SECRET"),
 		SecretKey:    os.Getenv("SUBADMIN_SECRET_KEY"),
 		BasePath:     basePath,
@@ -67,4 +76,17 @@ func normalizeBasePath(value string) string {
 		value = value[:len(value)-1]
 	}
 	return value
+}
+
+func resolveProjectRelativePath(value string) string {
+	if value == "" || filepath.IsAbs(value) {
+		return value
+	}
+	if wd, err := os.Getwd(); err == nil {
+		if filepath.Base(wd) == "backend" {
+			return filepath.Clean(filepath.Join(filepath.Dir(wd), value))
+		}
+		return filepath.Clean(filepath.Join(wd, value))
+	}
+	return filepath.Clean(value)
 }

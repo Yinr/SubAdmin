@@ -101,7 +101,7 @@ Completed:
 - Batch testing can collect and test all accounts matching the current upstream and local filters, not only the current page.
 - Batch token refresh proxies sub2api `/api/v1/admin/accounts/batch-refresh` for selected or filtered accounts with explicit confirmation.
 - Batch operation panels now appear before the account table with progress bars, bounded scroll areas, auto-scroll, and cached filtered ID sets.
-- Temporary sanitized batch test response logs can be written to `/tmp/subadmin-batch-tests/` for parser analysis.
+- Batch test response logs are off by default; when enabled, sanitized logs can be written under the project-root log directory configured by `SUBADMIN_LOG_DIR`.
 
 Next:
 

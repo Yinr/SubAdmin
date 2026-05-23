@@ -80,6 +80,7 @@ subAdmin/
 | `SUBADMIN_BASE_PATH` | `/` | 应用对外基础路径，也用于 Session Cookie Path |
 | `SUBADMIN_COOKIE_SECURE` | `true` | 是否只允许安全连接携带 Cookie |
 | `SUBADMIN_SESSION_TTL` | `24h` | Session 有效期 |
+| `SUBADMIN_LOG_DIR` | `data/logs` | 本地日志目录，批量测试响应日志保存到该目录下 |
 
 示例：
 
@@ -145,4 +146,5 @@ PLAN.md
 - 不要把真实 `SUBADMIN_LOGIN_SECRET` 写入 Git。
 - 不要把 SQLite 数据库提交到 Git。
 - 不要在浏览器端保存 sub2api 管理员 Key。
+- 批量测试响应日志默认不保存；如需保存，请使用项目根目录下的本地日志目录，例如 `data/logs`。
 - 当前项目仍在早期开发阶段，危险批量操作上线前需要额外确认和审计日志。

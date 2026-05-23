@@ -167,7 +167,7 @@ func main() {
 		}
 		if action == "accounts" {
 			if r.Method == http.MethodPost {
-				writeBatchAccountTest(w, r, siteService, id)
+				writeBatchAccountTest(w, r, siteService, id, cfg.LogDir)
 				return
 			}
 			if r.Method != http.MethodGet {
@@ -383,7 +383,7 @@ func writeSiteError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusBadRequest, err.Error())
 }
 
-func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
+func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64, logDir string) {
 	var input struct {
 		IDs     []int64 `json:"ids"`
 		ModelID string  `json:"modelId"`
@@ -443,7 +443,7 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 			}
 			result["body"] = sanitizedBody
 			if input.Log {
-				if path, err := writeBatchTestLog(siteID, accountID, sanitizedBody); err == nil {
+				if path, err := writeBatchTestLog(logDir, siteID, accountID, sanitizedBody); err == nil {
 					result["logPath"] = path
 				} else {
 					result["logError"] = err.Error()
@@ -717,8 +717,11 @@ func firstKnownTimeValue(text string, keys ...string) string {
 	return ""
 }
 
-func writeBatchTestLog(siteID, accountID int64, body string) (string, error) {
-	dir := "/tmp/subadmin-batch-tests"
+func writeBatchTestLog(baseDir string, siteID, accountID int64, body string) (string, error) {
+	dir := strings.TrimSpace(baseDir)
+	if dir == "" {
+		return "", nil
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
