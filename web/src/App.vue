@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import ExpandablePanel from './components/ExpandablePanel.vue'
+import StatsTable from './components/StatsTable.vue'
 
 type Site = {
   id: number
@@ -16,7 +18,7 @@ type Site = {
 type Account = Record<string, unknown>
 type Group = Record<string, unknown>
 type GroupState = 'any' | 'include' | 'exclude'
-type ViewMode = 'accounts' | 'docs'
+type ViewMode = 'stats' | 'accounts' | 'sites' | 'docs'
 type ApiOptions = RequestInit & { timeoutMs?: number }
 
 const authed = ref(false)
@@ -35,24 +37,29 @@ const accounts = ref<Account[]>([])
 const groups = ref<Group[]>([])
 const batchTestResults = ref<Record<string, unknown>[]>([])
 const batchRefreshResult = ref<Record<string, unknown> | null>(null)
+const statistics = ref<Record<string, unknown> | null>(null)
 const batchTestScroll = ref<HTMLElement | null>(null)
 const batchRefreshScroll = ref<HTMLElement | null>(null)
 const selectedAccountIds = ref<Set<string>>(new Set())
 const activeSiteId = ref<number | null>(null)
 const editingSite = ref<Site | null>(null)
 const selectedAccount = ref<Account | null>(null)
+const selectedBatchTestResult = ref<Record<string, unknown> | null>(null)
 const showSiteModal = ref(false)
 const showAccountModal = ref(false)
+const showBatchTestModal = ref(false)
 const loginLoading = ref(false)
 const sitesLoading = ref(false)
 const accountsLoading = ref(false)
 const groupsLoading = ref(false)
 const savingSite = ref(false)
 const docsLoading = ref(false)
+const statsLoading = ref(false)
 const batchTesting = ref(false)
 const batchRefreshing = ref(false)
 const batchCollecting = ref(false)
-const activeView = ref<ViewMode>('accounts')
+const activeView = ref<ViewMode>('stats')
+const statsError = ref('')
 const batchTestTotal = ref(0)
 const batchTestDone = ref(0)
 const batchRefreshTotal = ref(0)
@@ -62,6 +69,7 @@ const accountQueryElapsedSeconds = ref(0)
 const accountQuerySlow = ref(false)
 const accountQueryNotice = ref('')
 const groupPopoverAccount = ref<Account | null>(null)
+const chartHoverIndex = ref<number | null>(null)
 const groupPopoverPosition = reactive({ top: 0, left: 0 })
 const filteredAccountIDsCache = new Map<string, number[]>()
 const accountAbortController = ref<AbortController | null>(null)
@@ -100,6 +108,13 @@ const batchTestForm = reactive({
 const scheduleQuickFilter = ref('all')
 const groupToAdd = ref('')
 const groupFilterStates = reactive<Record<string, GroupState>>({})
+
+const statsRange = reactive({
+  preset: '7d',
+  startDate: formatDateInput(addDays(new Date(), -7)),
+  endDate: formatDateInput(new Date()),
+  granularity: 'day',
+})
 
 const accountPager = reactive({
   page: 1,
@@ -212,6 +227,52 @@ const batchRefreshProgress = computed(() => progressPercent(batchRefreshDone.val
 const allVisibleSelected = computed(() => visibleAccounts.value.length > 0 && visibleAccounts.value.every((account) => selectedAccountIds.value.has(accountID(account))))
 
 const activeSite = computed(() => sites.value.find((site) => site.id === activeSiteId.value) || null)
+const statisticsSnapshot = computed(() => unwrapAPIData(statistics.value?.snapshot))
+const statisticsStats = computed(() => {
+  const snapshotStats = statisticsSnapshot.value.stats
+  if (snapshotStats && typeof snapshotStats === 'object') return snapshotStats as Record<string, unknown>
+  return unwrapAPIData(statistics.value?.stats)
+})
+const statisticsTrend = computed(() => Array.isArray(statisticsSnapshot.value.trend) ? statisticsSnapshot.value.trend as Record<string, unknown>[] : [])
+const statisticsModels = computed(() => Array.isArray(statisticsSnapshot.value.models) ? statisticsSnapshot.value.models as Record<string, unknown>[] : [])
+const statisticsRanking = computed(() => {
+  const ranking = unwrapAPIData(statistics.value?.ranking)
+  return Array.isArray(ranking.ranking) ? ranking.ranking as Record<string, unknown>[] : []
+})
+const userConcurrency = computed(() => unwrapAPIData(statistics.value?.userConcurrency))
+const opsConcurrency = computed(() => unwrapAPIData(statistics.value?.opsConcurrency))
+const currentUserConcurrency = computed(() => {
+  const users = userConcurrency.value.user
+  if (users && typeof users === 'object') {
+    const opsUsers = Object.values(users as Record<string, Record<string, unknown>>)
+      .filter((user) => Number(user.current_in_use || 0) > 0 || Number(user.waiting_in_queue || 0) > 0)
+      .sort((a, b) => Number(b.current_in_use || 0) - Number(a.current_in_use || 0))
+    if (opsUsers.length) return opsUsers
+  }
+  const usersList = unwrapAPIData(statistics.value?.usersConcurrency)
+  if (!Array.isArray(usersList.active)) return []
+  return (usersList.active as Record<string, unknown>[])
+    .filter((user) => Number(user.current_concurrency || 0) > 0)
+    .sort((a, b) => Number(b.current_concurrency || 0) - Number(a.current_concurrency || 0))
+})
+const currentAccountConcurrency = computed(() => {
+  const accounts = opsConcurrency.value.account
+  if (!accounts || typeof accounts !== 'object') return []
+  return Object.values(accounts as Record<string, Record<string, unknown>>)
+    .filter((account) => Number(account.current_in_use || 0) > 0 || Number(account.waiting_in_queue || 0) > 0)
+    .sort((a, b) => Number(b.current_in_use || 0) - Number(a.current_in_use || 0))
+})
+const accountConcurrencySummary = computed(() => currentAccountConcurrency.value.reduce((acc, account) => {
+  acc.current += Number(account.current_in_use || 0)
+  acc.waiting += Number(account.waiting_in_queue || 0)
+  return acc
+}, { current: 0, waiting: 0 }))
+const topModels = computed(() => statisticsModels.value.slice(0, 8))
+const recentTrend = computed(() => statisticsTrend.value.slice(-12))
+const maxRankingCost = computed(() => Math.max(1, ...statisticsRanking.value.map((user) => Number(user.actual_cost || 0))))
+const maxTrendTokens = computed(() => Math.max(1, ...recentTrend.value.map((point) => Number(point.total_tokens || 0))))
+const maxTrendRequests = computed(() => Math.max(1, ...recentTrend.value.map((point) => Number(point.requests || 0))))
+const chartHoverPoint = computed(() => chartHoverIndex.value === null ? null : recentTrend.value[chartHoverIndex.value] || null)
 
 const dashboardStats = computed(() => {
   const scheduleCounts = accounts.value.reduce<Record<string, number>>((acc, account) => {
@@ -313,7 +374,7 @@ async function logout() {
   accounts.value = []
   activeSiteId.value = null
   accountPager.loaded = false
-  activeView.value = 'accounts'
+  activeView.value = 'stats'
 }
 
 async function showDocs() {
@@ -330,6 +391,64 @@ async function showDocs() {
   }
 }
 
+async function showStats() {
+  activeView.value = 'stats'
+  await loadStatistics()
+}
+
+async function loadStatistics() {
+  statsError.value = ''
+  if (!activeSiteId.value) {
+    statsError.value = '请先选择站点'
+    return
+  }
+  statsLoading.value = true
+  try {
+    const params = new URLSearchParams({
+      start_date: statsRange.startDate,
+      end_date: statsRange.endDate,
+      granularity: statsRange.granularity,
+    })
+    statistics.value = await api<Record<string, unknown>>(`api/sites/${activeSiteId.value}/statistics?${params.toString()}`)
+  } catch (error) {
+    statsError.value = error instanceof Error ? error.message : '加载统计失败'
+  } finally {
+    statsLoading.value = false
+  }
+}
+
+function addDays(date: Date, days: number) {
+  const result = new Date(date)
+  result.setDate(result.getDate() + days)
+  return result
+}
+
+function formatDateInput(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function setStatsPreset(preset: string) {
+  const now = new Date()
+  statsRange.preset = preset
+  if (preset === '24h') {
+    statsRange.startDate = formatDateInput(addDays(now, -1))
+    statsRange.granularity = 'hour'
+  } else if (preset === '30d') {
+    statsRange.startDate = formatDateInput(addDays(now, -30))
+    statsRange.granularity = 'day'
+  } else {
+    statsRange.startDate = formatDateInput(addDays(now, -7))
+    statsRange.granularity = 'day'
+  }
+  statsRange.endDate = formatDateInput(now)
+  loadStatistics()
+}
+
+function applyStatsRange() {
+  statsRange.preset = 'custom'
+  loadStatistics()
+}
+
 async function loadSites() {
   siteError.value = ''
   sitesLoading.value = true
@@ -337,8 +456,17 @@ async function loadSites() {
     const data = await api<{ items: Site[] }>('api/sites')
     sites.value = data.items || []
     if (!activeSiteId.value && sites.value.length) {
-      activeSiteId.value = (sites.value.find((site) => site.isDefault) || sites.value[0]).id
-      await loadGroups()
+      const defaultSite = sites.value.find((site) => site.isDefault)
+      if (defaultSite) {
+        activeSiteId.value = defaultSite.id
+        await loadGroups()
+        activeView.value = 'stats'
+        await loadStatistics()
+      } else {
+        activeView.value = 'sites'
+      }
+    } else if (!sites.value.length) {
+      activeView.value = 'sites'
     }
   } catch (error) {
     siteError.value = error instanceof Error ? error.message : '加载站点失败'
@@ -405,11 +533,21 @@ async function testSite(site: Site) {
 }
 
 function selectSite(site: Site) {
+  if (accountsLoading.value) cancelAccountQuery()
   activeSiteId.value = site.id
+  accounts.value = []
+  selectedAccountIds.value = new Set()
+  accountPager.loaded = false
+  accountPager.total = 0
+  accountPager.page = 1
+  accountQueryNotice.value = ''
+  accountError.value = ''
+  accountCache.clear()
+  filteredAccountIDsCache.clear()
   groups.value = []
   resetGroupFilters()
   loadGroups()
-  loadAccounts()
+  if (activeView.value === 'stats') loadStatistics()
 }
 
 function normalizeGroups(payload: any): Group[] {
@@ -501,6 +639,155 @@ function statusLabel(value: unknown) {
 
 function privacyModeLabel(value: unknown) {
   return optionLabel(privacyModeOptions, value)
+}
+
+function unwrapAPIData(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object') return {}
+  const raw = value as Record<string, unknown>
+  if (raw.data && typeof raw.data === 'object') return raw.data as Record<string, unknown>
+  return raw
+}
+
+function statValue(source: Record<string, unknown>, key: string) {
+  const value = source[key]
+  if (value === undefined || value === null || value === '') return '暂无'
+  if (typeof value === 'number') return value.toLocaleString('zh-CN')
+  return String(value)
+}
+
+function compactNumber(value: unknown) {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) return '暂无'
+  const abs = Math.abs(numeric)
+  if (abs >= 1_000_000_000) return `${(numeric / 1_000_000_000).toFixed(2)}B`
+  if (abs >= 1_000_000) return `${(numeric / 1_000_000).toFixed(2)}M`
+  if (abs >= 1_000) return `${(numeric / 1_000).toFixed(2)}K`
+  return numeric.toLocaleString('zh-CN')
+}
+
+function tokenValue(source: Record<string, unknown>, key: string) {
+  return compactNumber(source[key])
+}
+
+function statCost(source: Record<string, unknown>, key: string) {
+  const value = Number(source[key])
+  if (!Number.isFinite(value)) return '暂无'
+  return `$${value.toFixed(2)}`
+}
+
+function refreshTimeLabel() {
+  return formatDateTime(statisticsStats.value.stats_updated_at || statisticsSnapshot.value.generated_at)
+}
+
+function userDisplayName(user: Record<string, unknown>) {
+  return String(user.username || user.email || user.user_email || `用户 #${user.user_id || '未知'}`)
+}
+
+function chartPoints(rows: Record<string, unknown>[], key: string) {
+  if (!rows.length) return ''
+  const values = rows.map((row) => Number(row[key] || 0))
+  const max = Math.max(1, ...values)
+  const width = 520
+  const height = 170
+  return values.map((value, index) => {
+    const x = rows.length === 1 ? width / 2 : (index / (rows.length - 1)) * width
+    const y = height - (value / max) * height
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+}
+
+function chartPath(rows: Record<string, unknown>[], key: string) {
+  if (!rows.length) return ''
+  const values = rows.map((row) => Number(row[key] || 0))
+  const max = Math.max(1, ...values)
+  const width = 520
+  const height = 170
+  const points = values.map((value, index) => {
+    const x = rows.length === 1 ? width / 2 : (index / (rows.length - 1)) * width
+    const y = height - (value / max) * height
+    return { x, y }
+  })
+  if (points.length === 1) {
+    const p = points[0]
+    return `M ${p.x.toFixed(1)} ${p.y.toFixed(1)}`
+  }
+  const path = [`M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`]
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const p0 = points[i - 1] || points[i]
+    const p1 = points[i]
+    const p2 = points[i + 1]
+    const p3 = points[i + 2] || p2
+    const cp1x = p1.x + (p2.x - p0.x) / 6
+    const cp1y = p1.y + (p2.y - p0.y) / 6
+    const cp2x = p2.x - (p3.x - p1.x) / 6
+    const cp2y = p2.y - (p3.y - p1.y) / 6
+    path.push(`C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`)
+  }
+  return path.join(' ')
+}
+
+function chartX(index: number, rows = recentTrend.value) {
+  if (rows.length <= 1) return 260
+  return index / (rows.length - 1) * 520
+}
+
+function chartY(row: Record<string, unknown>, key: string) {
+  const max = key === 'requests' ? maxTrendRequests.value : maxTrendTokens.value
+  return 170 - Number(row[key] || 0) / max * 170
+}
+
+function chartAxisLabel(value: number) {
+  return compactNumber(value)
+}
+
+function handleChartMove(event: MouseEvent) {
+  if (!recentTrend.value.length) return
+  const rect = (event.currentTarget as SVGElement).getBoundingClientRect()
+  const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
+  chartHoverIndex.value = Math.round(ratio * (recentTrend.value.length - 1))
+}
+
+function clearChartHover() {
+  chartHoverIndex.value = null
+}
+
+function rankingWidth(user: Record<string, unknown>) {
+  return usagePercentWidth(Number(user.actual_cost || 0) / maxRankingCost.value * 100)
+}
+
+function userCurrentConcurrency(user: Record<string, unknown>) {
+  return user.current_concurrency ?? user.current_in_use ?? 0
+}
+
+function userMaxConcurrency(user: Record<string, unknown>) {
+  return user.concurrency ?? user.max_capacity ?? '未知'
+}
+
+function userWaitingConcurrency(user: Record<string, unknown>) {
+  return user.waiting_in_queue ?? 0
+}
+
+function userConcurrencyLoad(user: Record<string, unknown>) {
+  if (user.load_percentage !== undefined) return `${user.load_percentage}%`
+  const current = Number(userCurrentConcurrency(user))
+  const max = Number(userMaxConcurrency(user))
+  if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) return '未知'
+  return `${Math.round(current / max * 100)}%`
+}
+
+function accountConcurrencyName(account: Record<string, unknown>) {
+  return String(account.account_name || `账号 #${account.account_id || '未知'}`)
+}
+
+function accountConcurrencyCapacityTitle(account: Record<string, unknown>) {
+  return `并发: ${statValue(account, 'current_in_use')}\n上限: ${statValue(account, 'max_capacity')}\n排队: ${statValue(account, 'waiting_in_queue')}`
+}
+
+function accountStatusTagClass(key: string) {
+  if (key === 'ratelimit_accounts') return 'status-tag status-tag-warn'
+  if (key === 'error_accounts') return 'status-tag status-tag-danger'
+  if (key === 'overload_accounts') return 'status-tag status-tag-overload'
+  return 'status-tag status-tag-ok'
 }
 
 const activeAccountFilters = computed(() => {
@@ -1001,6 +1288,11 @@ function openAccountDetail(account: Account) {
   showAccountModal.value = true
 }
 
+function openBatchTestDetail(result: Record<string, unknown>) {
+  selectedBatchTestResult.value = result
+  showBatchTestModal.value = true
+}
+
 function clearAccountFilters() {
   Object.assign(accountFilters, { search: '', platform: '', status: '', type: '', privacyMode: '', upstreamGroup: '', sortBy: 'name', sortOrder: 'asc' })
   scheduleQuickFilter.value = 'all'
@@ -1142,6 +1434,16 @@ function batchResultHint(result: Record<string, unknown>) {
   return result.hint || result.resetAt || '异常'
 }
 
+function batchResultSummary(result: Record<string, unknown>) {
+  const text = String(result.message || result.error || result.hint || '')
+  if (!text) return '无响应内容'
+  return text.length > 36 ? `${text.slice(0, 36)}...` : text
+}
+
+function batchResultDetailJSON(result: Record<string, unknown>) {
+  return JSON.stringify(result, null, 2)
+}
+
 function progressPercent(done: number, total: number) {
   if (!total) return 0
   return Math.min(100, Math.round((done / total) * 100))
@@ -1222,46 +1524,212 @@ onUnmounted(() => {
           <p class="muted">会话过期时间：{{ expiresAt || '未知' }}</p>
         </div>
         <div class="topbar-actions">
+          <button :class="activeView === 'stats' ? '' : 'secondary'" @click="showStats">统计</button>
           <button :class="activeView === 'accounts' ? '' : 'secondary'" @click="activeView = 'accounts'">账号</button>
+          <button :class="activeView === 'sites' ? '' : 'secondary'" @click="activeView = 'sites'">站点</button>
           <button :class="activeView === 'docs' ? '' : 'secondary'" @click="showDocs">文档</button>
           <button class="secondary" @click="logout">退出登录</button>
         </div>
       </header>
 
-      <section v-if="activeView === 'accounts'" class="overview-grid">
-        <article class="overview-card">
-          <span>站点</span>
-          <strong>{{ dashboardStats.enabledSites }} / {{ dashboardStats.sites }}</strong>
-          <p class="muted">启用 / 全部</p>
-        </article>
-        <article class="overview-card">
-          <span>当前站点</span>
-          <strong>{{ activeSite?.name || '未选择' }}</strong>
-          <p class="muted">{{ activeSite?.enabled ? '启用' : '未启用或未知' }}</p>
-        </article>
-        <article class="overview-card">
-          <span>账号</span>
-          <strong>{{ dashboardStats.visibleAccounts }} / {{ dashboardStats.loadedAccounts }}</strong>
-          <p class="muted">当前页命中 / 已加载<span v-if="dashboardStats.upstreamTotal"> · 上游 {{ dashboardStats.upstreamTotal }}</span></p>
-        </article>
-        <article class="overview-card">
-          <span>状态</span>
-          <strong>{{ dashboardStats.activeAccounts }} active</strong>
-          <p class="muted">error {{ dashboardStats.errorAccounts }} · disabled {{ dashboardStats.disabledAccounts }}</p>
-        </article>
-        <article class="overview-card">
-          <span>调度风险</span>
-          <strong>{{ dashboardStats.rateLimited + dashboardStats.overload + dashboardStats.blocked }}</strong>
-          <p class="muted">限流 {{ dashboardStats.rateLimited }} · 过载 {{ dashboardStats.overload }} · 不可调度 {{ dashboardStats.blocked }}</p>
-        </article>
-        <article class="overview-card wide">
-          <span>平台分布</span>
-          <strong>{{ dashboardStats.platforms }}</strong>
-          <p class="muted">基于当前已加载账号结果统计</p>
-        </article>
+      <section v-if="activeView === 'stats'" class="panel stats-panel">
+        <div class="panel-head">
+          <div>
+            <h2>用量仪表盘</h2>
+            <p class="muted">当前站点：{{ activeSite?.name || '未选择' }} · 站点 {{ dashboardStats.enabledSites }} / {{ dashboardStats.sites }} 启用</p>
+          </div>
+          <div class="refresh-meta">
+            <span class="muted">刷新时间：{{ refreshTimeLabel() }}</span>
+            <button class="secondary" :disabled="statsLoading || !activeSiteId" @click="loadStatistics">{{ statsLoading ? '加载中...' : '刷新统计' }}</button>
+          </div>
+        </div>
+        <div class="stats-controls">
+          <button type="button" class="secondary" :class="{ active: statsRange.preset === '24h' }" @click="setStatsPreset('24h')">近 24 小时</button>
+          <button type="button" class="secondary" :class="{ active: statsRange.preset === '7d' }" @click="setStatsPreset('7d')">近 7 天</button>
+          <button type="button" class="secondary" :class="{ active: statsRange.preset === '30d' }" @click="setStatsPreset('30d')">近 30 天</button>
+          <label>开始<input v-model="statsRange.startDate" type="date" /></label>
+          <label>结束<input v-model="statsRange.endDate" type="date" /></label>
+          <label>粒度
+            <select v-model="statsRange.granularity">
+              <option value="hour">小时</option>
+              <option value="day">天</option>
+            </select>
+          </label>
+          <button type="button" @click="applyStatsRange">应用范围</button>
+        </div>
+        <p v-if="statsError" class="error">{{ statsError }}</p>
+        <div class="stats-grid">
+          <article class="stat-panel-card">
+            <span>用户</span>
+            <strong>{{ statValue(statisticsStats, 'active_users') }} / {{ statValue(statisticsStats, 'total_users') }}</strong>
+            <p class="muted stat-lines"><span>今日活跃 / 全部</span><span title="1 小时内活跃用户数">当前活跃 {{ statValue(statisticsStats, 'hourly_active_users') }}</span></p>
+          </article>
+          <article class="stat-panel-card">
+            <span>账号状态</span>
+            <strong>{{ statValue(statisticsStats, 'normal_accounts') }} / {{ statValue(statisticsStats, 'total_accounts') }}</strong>
+            <div class="status-chip-row">
+              <span class="status-tag status-tag-warn">限流 {{ statValue(statisticsStats, 'ratelimit_accounts') }}</span>
+              <span class="status-tag status-tag-danger">错误 {{ statValue(statisticsStats, 'error_accounts') }}</span>
+              <span class="status-tag status-tag-overload">过载 {{ statValue(statisticsStats, 'overload_accounts') }}</span>
+            </div>
+          </article>
+          <article class="stat-panel-card">
+            <span>今日请求</span>
+            <strong>{{ statValue(statisticsStats, 'today_requests') }}</strong>
+            <p class="muted">今日消耗 {{ statCost(statisticsStats, 'today_actual_cost') }}</p>
+          </article>
+          <article class="stat-panel-card">
+            <span>今日 Tokens</span>
+            <strong>{{ tokenValue(statisticsStats, 'today_tokens') }}</strong>
+            <p class="muted stat-lines"><span>费用 {{ statCost(statisticsStats, 'today_actual_cost') }}</span><span>成本 {{ statCost(statisticsStats, 'today_account_cost') }}</span></p>
+          </article>
+          <article class="stat-panel-card">
+            <span>累计请求</span>
+            <strong>{{ statValue(statisticsStats, 'total_requests') }}</strong>
+            <p class="muted stat-lines"><span>费用 {{ statCost(statisticsStats, 'total_actual_cost') }}</span><span>成本 {{ statCost(statisticsStats, 'total_account_cost') }}</span></p>
+          </article>
+          <article class="stat-panel-card">
+            <span>吞吐</span>
+            <strong>{{ statValue(statisticsStats, 'rpm') }} RPM / {{ statValue(statisticsStats, 'tpm') }} TPM</strong>
+            <p class="muted">最近 5 分钟聚合统计。</p>
+          </article>
+        </div>
+        <div class="stats-sections">
+          <ExpandablePanel title="请求与 Token 趋势">
+            <template #meta><span class="muted">{{ statisticsSnapshot.start_date || statsRange.startDate }} 至 {{ statisticsSnapshot.end_date || statsRange.endDate }}</span></template>
+            <div v-if="recentTrend.length" class="trend-panel">
+              <div class="trend-chart-card">
+                <div class="trend-chart-frame">
+                  <svg viewBox="0 0 600 220" role="img" aria-label="请求与 Token 趋势" @mousemove="handleChartMove" @mouseleave="clearChartHover">
+                    <g transform="translate(56 18)">
+                      <line x1="0" y1="0" x2="0" y2="170" class="chart-axis" />
+                      <line x1="0" y1="170" x2="520" y2="170" class="chart-axis" />
+                      <line x1="0" y1="85" x2="520" y2="85" class="chart-grid" />
+                      <text x="-8" y="4" class="chart-tick" text-anchor="end">{{ chartAxisLabel(maxTrendTokens) }}</text>
+                      <text x="-8" y="89" class="chart-tick" text-anchor="end">{{ chartAxisLabel(maxTrendTokens / 2) }}</text>
+                      <text x="-8" y="174" class="chart-tick" text-anchor="end">0</text>
+                      <path :d="chartPath(recentTrend, 'total_tokens')" class="chart-line tokens" />
+                      <path :d="chartPath(recentTrend, 'requests')" class="chart-line requests" />
+                      <g v-if="chartHoverPoint && chartHoverIndex !== null" class="chart-hover">
+                        <line :x1="chartX(chartHoverIndex)" y1="0" :x2="chartX(chartHoverIndex)" y2="170" class="chart-hover-line" />
+                        <circle :cx="chartX(chartHoverIndex)" :cy="chartY(chartHoverPoint, 'total_tokens')" r="4" class="chart-dot tokens" />
+                        <circle :cx="chartX(chartHoverIndex)" :cy="chartY(chartHoverPoint, 'requests')" r="4" class="chart-dot requests" />
+                      </g>
+                    </g>
+                    <foreignObject v-if="chartHoverPoint" x="350" y="18" width="230" height="90">
+                      <div class="chart-tooltip">
+                        <strong>{{ chartHoverPoint.date }}</strong>
+                        <span>Tokens：{{ tokenValue(chartHoverPoint, 'total_tokens') }}</span>
+                        <span>请求：{{ statValue(chartHoverPoint, 'requests') }}</span>
+                      </div>
+                    </foreignObject>
+                  </svg>
+                </div>
+                <div class="chart-legend-row">
+                  <div class="chart-legend"><span class="legend-token">Tokens</span><span class="legend-request">请求</span></div>
+                  <div class="chart-labels"><span>{{ recentTrend[0]?.date }}</span><span>{{ recentTrend[recentTrend.length - 1]?.date }}</span></div>
+                </div>
+              </div>
+              <div class="trend-summary-grid">
+                <article class="trend-summary-card"><span>总 Tokens</span><strong>{{ tokenValue(statisticsStats, 'total_tokens') }}</strong></article>
+                <article class="trend-summary-card"><span>总请求</span><strong>{{ statValue(statisticsStats, 'total_requests') }}</strong></article>
+              </div>
+            </div>
+            <p v-else class="muted">暂无趋势数据。</p>
+          </ExpandablePanel>
+          <ExpandablePanel title="模型分布">
+            <template #meta><span class="muted">{{ statisticsSnapshot.start_date || statsRange.startDate }} 至 {{ statisticsSnapshot.end_date || statsRange.endDate }}</span></template>
+            <StatsTable>
+              <table class="mini-table">
+                <colgroup>
+                  <col class="name-col" />
+                  <col class="num-col" />
+                  <col class="num-col" />
+                  <col class="money-col" />
+                  <col class="money-col" />
+                </colgroup>
+                <thead><tr><th>模型</th><th class="num-cell">请求</th><th class="num-cell">Tokens</th><th class="num-cell">实际扣费</th><th class="num-cell">成本</th></tr></thead>
+                <tbody>
+                  <tr v-for="model in topModels" :key="String(model.model)">
+                    <td class="name-cell">{{ model.model || '未知模型' }}</td>
+                    <td class="num-cell">{{ statValue(model, 'requests') }}</td>
+                    <td class="num-cell">{{ tokenValue(model, 'total_tokens') }}</td>
+                    <td class="num-cell">{{ statCost(model, 'actual_cost') }}</td>
+                    <td class="num-cell">{{ statCost(model, 'account_cost') }}</td>
+                  </tr>
+                  <tr v-if="!topModels.length"><td colspan="5" class="muted">暂无模型统计。</td></tr>
+                </tbody>
+              </table>
+            </StatsTable>
+          </ExpandablePanel>
+          <ExpandablePanel title="用户消费排行">
+            <template #meta><span class="muted">{{ statisticsSnapshot.start_date || statsRange.startDate }} 至 {{ statisticsSnapshot.end_date || statsRange.endDate }}</span></template>
+            <StatsTable class="fit-table">
+              <table class="mini-table ranking-table">
+                <colgroup>
+                  <col class="name-col" />
+                  <col class="usage-col" />
+                </colgroup>
+                <thead>
+                  <tr><th>用户</th><th>用量</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="user in statisticsRanking" :key="String(user.user_id)">
+                    <td class="ranking-name">{{ userDisplayName(user) }}</td>
+                    <td class="ranking-usage">
+                      <div class="usage-bar-shell"><div class="usage-bar" :style="{ width: `${rankingWidth(user)}%` }"></div></div>
+                      <span>费用 {{ statCost(user, 'actual_cost') }}</span>
+                      <span>Tokens {{ tokenValue(user, 'tokens') }}</span>
+                    </td>
+                  </tr>
+                  <tr v-if="!statisticsRanking.length"><td colspan="2" class="muted">暂无用户排行数据。</td></tr>
+                </tbody>
+              </table>
+            </StatsTable>
+          </ExpandablePanel>
+          <ExpandablePanel title="当前账号并发">
+            <template #meta><span class="muted">{{ accountConcurrencySummary.current }} 使用中 · {{ accountConcurrencySummary.waiting }} 排队</span></template>
+            <p v-if="opsConcurrency.enabled === false" class="muted">sub2api Ops 实时监控未开启，无法获取账号并发。</p>
+            <p v-else-if="statistics?.opsConcurrencyError" class="error">{{ statistics.opsConcurrencyError }}</p>
+            <StatsTable v-else class="concurrency-scroll">
+              <table class="mini-table concurrency-table">
+                <colgroup><col class="concurrency-account-col" /><col class="concurrency-value-col" /></colgroup>
+                <thead><tr><th>账号</th><th title="并发 / 上限">容量</th></tr></thead>
+                <tbody>
+                  <tr v-for="account in currentAccountConcurrency" :key="String(account.account_id)">
+                    <td class="concurrency-name" :title="accountConcurrencyName(account)">{{ accountConcurrencyName(account) }}</td>
+                    <td class="concurrency-values" :title="accountConcurrencyCapacityTitle(account)">{{ statValue(account, 'current_in_use') }} / {{ statValue(account, 'max_capacity') }}</td>
+                  </tr>
+                  <tr v-if="!currentAccountConcurrency.length"><td colspan="2" class="muted">暂无账号并发数据。</td></tr>
+                </tbody>
+              </table>
+            </StatsTable>
+          </ExpandablePanel>
+          <ExpandablePanel title="当前用户并发">
+            <template #meta><span class="muted" title="优先来自 /api/v1/admin/ops/user-concurrency；无实时数据时回退到最近活跃前 100 个用户。">实时监控</span></template>
+            <p class="muted compact-note">数据优先来自 Ops 用户并发；无实时数据时回退到最近活跃前 100 个用户。</p>
+            <p v-if="statistics?.usersConcurrencyError && userConcurrency.enabled === false" class="muted">用户列表并发读取失败，且 sub2api Ops 实时监控未开启。</p>
+            <p v-else-if="statistics?.usersConcurrencyError && statistics?.userConcurrencyError" class="error">{{ statistics.usersConcurrencyError }}</p>
+            <div v-else-if="currentUserConcurrency.length" class="stats-table-wrap concurrency-scroll">
+              <table class="mini-table">
+                <thead><tr><th>用户</th><th>当前使用</th><th>排队</th><th>上限</th><th>负载</th></tr></thead>
+                <tbody>
+                  <tr v-for="user in currentUserConcurrency" :key="String(user.user_id)">
+                    <td class="concurrency-name" :title="userDisplayName(user)">{{ userDisplayName(user) }}</td>
+                    <td>{{ userCurrentConcurrency(user) }}</td>
+                    <td>{{ userWaitingConcurrency(user) }}</td>
+                    <td>{{ userMaxConcurrency(user) }}</td>
+                    <td>{{ userConcurrencyLoad(user) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-else class="muted">当前没有检测到正在使用的用户。</p>
+          </ExpandablePanel>
+        </div>
       </section>
 
-      <section v-else class="panel docs-panel">
+      <section v-else-if="activeView === 'docs'" class="panel docs-panel">
         <div class="panel-head">
           <div>
             <h2>API 文档</h2>
@@ -1286,8 +1754,8 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <div v-if="activeView === 'accounts'" class="layout-grid">
-        <aside class="panel">
+      <div v-if="activeView === 'accounts' || activeView === 'sites'" class="layout-grid" :class="{ 'single-column': activeView === 'accounts' }">
+        <aside v-if="activeView === 'sites'" class="panel">
           <div class="panel-head">
             <h2>站点</h2>
             <button @click="openCreateSite">新增</button>
@@ -1303,7 +1771,7 @@ onUnmounted(() => {
               <p class="muted">{{ site.baseUrl }}</p>
               <p class="muted">{{ site.enabled ? '启用' : '停用' }} · {{ site.adminKeyHint }}</p>
               <div class="actions">
-                <button class="secondary" @click="selectSite(site)">查看账号</button>
+                <button class="secondary" @click="selectSite(site)">选择站点</button>
                 <button class="secondary" @click="openEditSite(site)">编辑</button>
                 <button class="secondary" :disabled="site.isDefault" @click="patchSite(site, { isDefault: true })">设默认</button>
                 <button class="secondary" @click="patchSite(site, { enabled: !site.enabled })">{{ site.enabled ? '停用' : '启用' }}</button>
@@ -1315,7 +1783,7 @@ onUnmounted(() => {
           </div>
         </aside>
 
-        <section class="panel content-panel">
+        <section v-if="activeView === 'accounts'" class="panel content-panel">
           <div class="panel-head">
             <h2>上游账号</h2>
             <button class="secondary" :disabled="accountsLoading" @click="reloadAccountsFromUpstream">刷新</button>
@@ -1439,45 +1907,48 @@ onUnmounted(() => {
             </button>
           </div>
           <p v-if="accountQueryNotice" class="muted query-notice">{{ accountQueryNotice }}</p>
-          <section class="section-card batch-section">
-            <div class="section-title">
+          <details class="section-card batch-section batch-details">
+            <summary class="section-title batch-summary">
               <div>
                 <h3>批量操作</h3>
                 <p class="muted">已选择 {{ selectedAccountCount }} 个账号；当前筛选全部会先汇总账号 ID 并缓存。</p>
               </div>
+              <span class="summary-toggle"></span>
+            </summary>
+            <div class="batch-body">
               <button class="secondary" :disabled="selectedAccountCount === 0" @click="clearAccountSelection">一键取消选择</button>
-            </div>
-            <div class="primary-actions">
-              <button :disabled="batchTesting || selectedAccountCount === 0" @click="testSelectedAccounts">{{ batchTesting ? '检测中...' : '检测选中账号' }}</button>
-              <button class="secondary" :disabled="batchTesting || batchCollecting || !activeSiteId" @click="testAllFilteredAccounts">{{ batchCollecting ? '收集中...' : '检测当前筛选全部' }}</button>
-            </div>
-            <details class="advanced-block">
-              <summary>检测参数</summary>
-              <div class="filter-grid advanced-grid">
-                <label>测试模型<input v-model="batchTestForm.modelId" placeholder="留空使用 sub2api 默认测试模型" /></label>
-                <label>提示词<input v-model="batchTestForm.prompt" placeholder="留空使用上游默认测试提示" /></label>
-                <label>模式
-                  <select v-model="batchTestForm.mode">
-                    <option value="">默认</option>
-                    <option value="chat">chat</option>
-                    <option value="responses">responses</option>
-                    <option value="image">image</option>
-                  </select>
-                </label>
-                <label>基础间隔(ms)<input v-model.number="batchTestForm.delayMs" type="number" min="0" step="100" /></label>
-                <label>随机抖动(ms)<input v-model.number="batchTestForm.jitterMs" type="number" min="0" step="100" /></label>
-                <label class="inline-check"><input v-model="batchTestForm.logResponses" type="checkbox" /> 临时记录响应日志</label>
-              </div>
-            </details>
-            <details class="advanced-block danger-block">
-              <summary>刷新令牌</summary>
-              <p class="muted">会修改 sub2api 上游账号 credentials，建议先按测试分组筛选并确认范围。</p>
               <div class="primary-actions">
-                <button class="secondary" :disabled="batchRefreshing || selectedAccountCount === 0" @click="refreshSelectedAccountTokens">{{ batchRefreshing ? '刷新中...' : '刷新选中令牌' }}</button>
-                <button class="secondary" :disabled="batchRefreshing || batchCollecting || !activeSiteId" @click="refreshAllFilteredAccountTokens">{{ batchCollecting ? '收集中...' : '刷新当前筛选全部令牌' }}</button>
+                <button :disabled="batchTesting || selectedAccountCount === 0" @click="testSelectedAccounts">{{ batchTesting ? '检测中...' : '检测选中账号' }}</button>
+                <button class="secondary" :disabled="batchTesting || batchCollecting || !activeSiteId" @click="testAllFilteredAccounts">{{ batchCollecting ? '收集中...' : '检测当前筛选全部' }}</button>
               </div>
-            </details>
-          </section>
+              <details class="advanced-block">
+                <summary>检测参数</summary>
+                <div class="filter-grid advanced-grid">
+                  <label>测试模型<input v-model="batchTestForm.modelId" placeholder="留空使用 sub2api 默认测试模型" /></label>
+                  <label>提示词<input v-model="batchTestForm.prompt" placeholder="留空使用上游默认测试提示" /></label>
+                  <label>模式
+                    <select v-model="batchTestForm.mode">
+                      <option value="">默认</option>
+                      <option value="chat">chat</option>
+                      <option value="responses">responses</option>
+                      <option value="image">image</option>
+                    </select>
+                  </label>
+                  <label>基础间隔(ms)<input v-model.number="batchTestForm.delayMs" type="number" min="0" step="100" /></label>
+                  <label>随机抖动(ms)<input v-model.number="batchTestForm.jitterMs" type="number" min="0" step="100" /></label>
+                  <label class="inline-check"><input v-model="batchTestForm.logResponses" type="checkbox" /> 临时记录响应日志</label>
+                </div>
+              </details>
+              <details class="advanced-block danger-block">
+                <summary>刷新令牌</summary>
+                <p class="muted">会修改 sub2api 上游账号 credentials，建议先按测试分组筛选并确认范围。</p>
+                <div class="primary-actions">
+                  <button class="secondary" :disabled="batchRefreshing || selectedAccountCount === 0" @click="refreshSelectedAccountTokens">{{ batchRefreshing ? '刷新中...' : '刷新选中令牌' }}</button>
+                  <button class="secondary" :disabled="batchRefreshing || batchCollecting || !activeSiteId" @click="refreshAllFilteredAccountTokens">{{ batchCollecting ? '收集中...' : '刷新当前筛选全部令牌' }}</button>
+                </div>
+              </details>
+            </div>
+          </details>
           <p v-if="batchCollecting" class="muted">正在按当前筛选条件分页收集账号 ID...</p>
           <p v-if="batchTesting" class="muted">正在检测 {{ selectedAccountCount }} 个账号；每个账号完成后会更新一行结果。大批量会自动提高最小间隔。</p>
           <p v-if="batchRefreshing" class="muted">正在刷新账号 OAuth 令牌；sub2api 批量刷新接口会修改上游账号凭证。</p>
@@ -1503,7 +1974,7 @@ onUnmounted(() => {
             </div>
             <div ref="batchTestScroll" class="result-scroll table-wrap">
               <table class="account-table result-table">
-                <thead><tr><th>账号 ID</th><th>结果</th><th>模型</th><th>HTTP</th><th>耗时</th><th>提示</th><th>摘要</th></tr></thead>
+                <thead><tr><th>账号 ID</th><th>结果</th><th>模型</th><th>HTTP</th><th>耗时</th><th>提示</th><th>详情</th></tr></thead>
                 <tbody>
                   <tr v-for="result in batchTestResults" :key="String(result.id)">
                     <td>{{ result.id }}</td>
@@ -1512,7 +1983,9 @@ onUnmounted(() => {
                     <td>{{ result.statusCode || '未知' }}</td>
                     <td>{{ result.durationMs ?? '未知' }} ms</td>
                     <td>{{ batchResultHint(result) }}</td>
-                    <td><pre class="inline-json">{{ result.message || result.error || '无响应内容' }}</pre></td>
+                    <td>
+                      <button class="secondary mini" type="button" :title="batchResultSummary(result)" @click="openBatchTestDetail(result)">查看详情</button>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -1766,6 +2239,35 @@ onUnmounted(() => {
         </div>
       </section>
     </div>
+
+    <div v-if="showBatchTestModal && selectedBatchTestResult" class="modal-mask">
+      <section class="modal-card detail-card">
+        <h2>检测详情</h2>
+        <p class="muted">账号 ID：{{ selectedBatchTestResult.id || '未知' }}</p>
+        <div class="detail-sections">
+          <section class="detail-section">
+            <h3>结果</h3>
+            <div class="detail-grid">
+              <span>状态</span><strong>{{ batchResultLabel(selectedBatchTestResult) }}</strong>
+              <span>提示</span><strong>{{ batchResultHint(selectedBatchTestResult) }}</strong>
+              <span>模型</span><strong>{{ selectedBatchTestResult.model || '未知' }}</strong>
+              <span>HTTP</span><strong>{{ selectedBatchTestResult.statusCode || '未知' }}</strong>
+              <span>耗时</span><strong>{{ selectedBatchTestResult.durationMs ?? '未知' }} ms</strong>
+              <span>重置时间</span><strong>{{ selectedBatchTestResult.resetAt || '未知' }}</strong>
+            </div>
+          </section>
+          <section class="detail-section">
+            <h3>摘要</h3>
+            <p class="result-message">{{ selectedBatchTestResult.message || selectedBatchTestResult.error || '无响应内容' }}</p>
+          </section>
+        </div>
+        <pre class="detail-json">{{ batchResultDetailJSON(selectedBatchTestResult) }}</pre>
+        <div class="modal-actions">
+          <button type="button" class="secondary" @click="copyText(batchResultDetailJSON(selectedBatchTestResult), '检测详情')">复制详情</button>
+          <button type="button" class="secondary" @click="showBatchTestModal = false">关闭</button>
+        </div>
+      </section>
+    </div>
   </main>
 </template>
 
@@ -1795,13 +2297,84 @@ onUnmounted(() => {
 .overview-card strong { display: block; margin-top: 8px; color: #fff; font-size: 22px; line-height: 1.2; }
 .overview-card p { margin: 8px 0 0; font-size: 13px; }
 .layout-grid { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 18px; align-items: start; }
+.layout-grid.single-column { grid-template-columns: 1fr; }
 .panel { padding: 18px; }
 .content-panel { min-height: 520px; }
+.stats-panel { display: grid; gap: 14px; }
+.stats-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, auto)); gap: 10px; align-items: end; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 16px; background: rgba(2, 6, 23, 0.22); }
+.stats-controls label { min-width: 150px; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.stat-panel-card { padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(2, 6, 23, 0.24); }
+.stat-panel-card.wide-card { grid-column: span 2; }
+.stat-panel-card span { color: #94a3b8; font-size: 13px; }
+.stat-panel-card strong { display: block; margin-top: 8px; color: #fff; font-size: 22px; }
+.stat-panel-card p { margin: 8px 0 0; }
+.stat-lines { display: grid; gap: 3px; }
+.stats-sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 14px; }
+.trend-panel { display: grid; gap: 12px; }
+.trend-chart-card { display: grid; gap: 10px; }
+.trend-chart-frame { overflow: auto; border: 1px solid rgba(148, 163, 184, 0.12); border-radius: 14px; background: rgba(2, 6, 23, 0.2); }
+.trend-chart-frame svg { width: 100%; min-width: 600px; min-height: 240px; padding: 4px 0; overflow: visible; }
+.chart-axis { stroke: rgba(148, 163, 184, 0.38); stroke-width: 1; }
+.chart-grid { stroke: rgba(148, 163, 184, 0.18); stroke-width: 1; stroke-dasharray: 4 5; }
+.chart-line { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.chart-line.tokens { stroke: #8b5cf6; }
+.chart-line.requests { stroke: #22d3ee; }
+.chart-tick { fill: #94a3b8; font-size: 11px; }
+.chart-hover-line { stroke: rgba(226, 232, 240, 0.35); stroke-width: 1; stroke-dasharray: 4 4; }
+.chart-dot.tokens { fill: #8b5cf6; stroke: #0f172a; stroke-width: 2; }
+.chart-dot.requests { fill: #22d3ee; stroke: #0f172a; stroke-width: 2; }
+.chart-tooltip { display: grid; gap: 4px; box-sizing: border-box; padding: 9px 10px; border: 1px solid rgba(148, 163, 184, 0.24); border-radius: 12px; background: rgba(2, 6, 23, 0.88); color: #e2e8f0; font-size: 12px; }
+.chart-tooltip strong { color: #fff; }
+.chart-legend-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+.chart-legend, .chart-labels { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; color: #94a3b8; font-size: 12px; }
+.trend-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.trend-summary-card { padding: 12px 14px; border: 1px solid rgba(148, 163, 184, 0.12); border-radius: 14px; background: rgba(2, 6, 23, 0.2); }
+.trend-summary-card span { display: block; color: #94a3b8; font-size: 12px; }
+.trend-summary-card strong { display: block; margin-top: 6px; color: #fff; font-size: 20px; }
+.legend-token::before, .legend-request::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 99px; }
+.legend-token::before { background: #8b5cf6; }
+.legend-request::before { background: #22d3ee; }
+.full-scroll { overflow: auto; max-width: 100%; }
+.full-scroll .mini-table { min-width: 620px; table-layout: fixed; }
+.fit-table .mini-table { min-width: 320px; }
+.name-col { width: 28%; }
+.bar-col { width: 34%; }
+.num-col { width: 14%; }
+.money-col { width: 15%; }
+.name-cell, .ranking-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.num-cell { text-align: right; white-space: nowrap; }
+.ranking-table .name-col { width: 34%; }
+.ranking-table .usage-col { width: auto; }
+.ranking-usage { display: grid; gap: 6px; }
+.ranking-usage span { color: #94a3b8; font-size: 12px; }
+.full-scroll::-webkit-scrollbar, .trend-chart-frame::-webkit-scrollbar { height: 10px; width: 10px; }
+.full-scroll::-webkit-scrollbar-track, .trend-chart-frame::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.45); border-radius: 999px; }
+.full-scroll::-webkit-scrollbar-thumb, .trend-chart-frame::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.34); border: 2px solid transparent; background-clip: padding-box; border-radius: 999px; }
+.full-scroll::-webkit-scrollbar-thumb:hover, .trend-chart-frame::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.5); border: 2px solid transparent; background-clip: padding-box; }
+.concurrency-scroll { max-height: 360px; overflow: auto; }
+.concurrency-scroll .mini-table { min-width: 320px; table-layout: fixed; }
+.concurrency-account-col { width: auto; }
+.concurrency-value-col { width: 96px; }
+.concurrency-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.concurrency-values { white-space: nowrap; }
+.status-chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.status-tag { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.status-tag-ok { background: rgba(34, 197, 94, 0.16); color: #86efac; }
+.status-tag-warn { background: rgba(234, 179, 8, 0.18); color: #fde68a; }
+.status-tag-danger { background: rgba(239, 68, 68, 0.18); color: #fecaca; }
+.status-tag-overload { background: rgba(249, 115, 22, 0.18); color: #fdba74; }
+.stats-table-wrap { overflow: auto; border-radius: 12px; border: 1px solid rgba(148, 163, 184, 0.12); }
+.mini-table { width: 100%; border-collapse: collapse; min-width: 560px; }
+.mini-table th, .mini-table td { padding: 10px 12px; border-bottom: 1px solid rgba(148, 163, 184, 0.1); text-align: left; font-size: 13px; }
+.mini-table th { color: #c4b5fd; background: rgba(2, 6, 23, 0.28); }
+.mini-table td { color: #e2e8f0; }
 .docs-panel { display: grid; gap: 14px; }
 .docs-links { display: flex; flex-wrap: wrap; gap: 10px; }
 .docs-reader { display: grid; gap: 12px; margin-top: 8px; }
 .docs-reader pre { margin: 0; max-height: 620px; overflow: auto; padding: 16px; border-radius: 14px; background: rgba(2, 6, 23, 0.55); color: #dbeafe; line-height: 1.55; white-space: pre-wrap; }
 .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
+.refresh-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; }
 .eyebrow { margin: 0 0 8px; color: #c4b5fd; letter-spacing: 0.16em; text-transform: uppercase; font-size: 12px; }
 h1, h2 { margin: 0; }
 h3 { margin: 0 0 10px; font-size: 15px; }
@@ -1819,6 +2392,12 @@ h3 { margin: 0 0 10px; font-size: 15px; }
 .advanced-grid { margin-top: 12px; }
 .danger-block { border-color: rgba(248, 113, 113, 0.2); }
 .batch-section { background: linear-gradient(135deg, rgba(30, 41, 59, 0.66), rgba(15, 23, 42, 0.5)); }
+.batch-details { display: block; }
+.batch-summary { cursor: pointer; list-style: none; margin: 0; }
+.batch-summary::-webkit-details-marker { display: none; }
+.batch-body { display: grid; gap: 12px; margin-top: 12px; }
+.summary-toggle::after { content: '展开'; color: #c4b5fd; font-size: 13px; font-weight: 700; }
+.batch-details[open] .summary-toggle::after { content: '收起'; }
 .filter-note { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin: 8px 0 12px; padding: 10px 12px; border-radius: 14px; background: rgba(37, 99, 235, 0.1); color: #cbd5e1; }
 .filter-note.compact { margin-top: 0; }
 .filter-note span { color: #94a3b8; font-size: 13px; }
@@ -1844,6 +2423,7 @@ button {
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 .button-link { display: inline-block; border-radius: 12px; padding: 10px 12px; color: #fff; font-weight: 700; text-decoration: none; }
 .secondary { background: rgba(148, 163, 184, 0.14); color: #e2e8f0; }
+.secondary.active { background: linear-gradient(135deg, #7c3aed, #2563eb); color: #fff; }
 .mini { margin-left: 8px; padding: 5px 8px; border-radius: 9px; background: rgba(148, 163, 184, 0.14); color: #e2e8f0; font-size: 12px; }
 .danger { background: rgba(239, 68, 68, 0.16); color: #fecaca; }
 .site-list, .account-list { display: grid; gap: 12px; }
@@ -1947,6 +2527,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .detail-section .detail-grid { margin: 0; }
 .detail-grid span { color: #94a3b8; }
 .detail-grid strong { overflow-wrap: anywhere; }
+.result-message { margin: 0; color: #dbeafe; overflow-wrap: anywhere; line-height: 1.6; }
 .detail-json { overflow: auto; max-height: 360px; padding: 14px; border-radius: 14px; background: rgba(2, 6, 23, 0.55); color: #dbeafe; font-size: 12px; line-height: 1.55; }
 .inline-json { max-width: 520px; max-height: 160px; overflow: auto; margin: 0; white-space: pre-wrap; color: #dbeafe; font-size: 12px; }
 .modal-actions { justify-content: flex-end; }
@@ -1954,14 +2535,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .layout-grid { grid-template-columns: 1fr; }
   .topbar { align-items: flex-start; flex-direction: column; }
   .topbar-actions { width: 100%; justify-content: flex-start; }
-  .overview-card.wide { grid-column: auto; }
+  .overview-card.wide, .stat-panel-card.wide-card { grid-column: auto; }
   .account-table { min-width: 960px; }
 }
 @media (max-width: 640px) {
   .app-shell { padding: 12px; }
   .login-card { margin: 6vh auto; padding: 20px; }
   .topbar, .panel, .modal-card { border-radius: 18px; padding: 14px; }
-  .topbar-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .topbar-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .topbar-actions button { padding: 10px 8px; }
   .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .overview-card { padding: 12px; }

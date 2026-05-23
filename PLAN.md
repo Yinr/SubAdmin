@@ -102,12 +102,30 @@ Completed:
 - Batch token refresh proxies sub2api `/api/v1/admin/accounts/batch-refresh` for selected or filtered accounts with explicit confirmation.
 - Batch operation panels now appear before the account table with progress bars, bounded scroll areas, auto-scroll, and cached filtered ID sets.
 - Temporary sanitized batch test response logs can be written to `/tmp/subadmin-batch-tests/` for parser analysis.
-- Add a status statistics page to show active users, their concurrent connections, active upstream accounts with concurrency, and recent usage summaries with 1/5/10/30 minute and 1 hour windows.
 
 Next:
 
 - Promote batch tests into persisted Jobs with retry and history.
 - Optional later polish after core workflows are stable: export batch test results, retry a single failure category, and expand known-error classification for clearer summaries.
+
+## Phase 4.5: Recent Status Statistics
+
+Status: next priority.
+
+Navigation model:
+
+- Split site selection/settings from account operations.
+- Keep a shared active site context used by the statistics page and account management page.
+- If a default site exists, enter the statistics page directly after login and use that default site.
+- If no default site exists, route the user to site selection/settings first.
+- Account management should use the shared active site and only query accounts when the user explicitly clicks query/refresh.
+
+- Add a status statistics page/panel for recent runtime activity.
+- Show active users and each user's concurrent connection count.
+- Show active upstream accounts and each upstream account's concurrent usage count.
+- Show recent user usage summaries with 1/5/10/30 minute and 1 hour windows.
+- Prefer server-side aggregation so the browser does not need to pull excessive raw usage rows.
+- Add top-level navigation for Statistics, Accounts, Sites/Settings, and Docs.
 
 ## Phase 5: Import Preview Workflow
 
@@ -179,4 +197,4 @@ Status: ongoing.
 
 ## Immediate Next Step
 
-Promote batch account tests into persisted Jobs with retry and history.
+Implement the shared active-site navigation model, then build the recent status statistics page/panel.

@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -206,6 +207,14 @@ func main() {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(statusCode)
 			_, _ = w.Write(sanitizeJSONForBrowser(data))
+			return
+		}
+		if action == "statistics" {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeSiteStatistics(w, r, siteService, id)
 			return
 		}
 		if action != "" {
@@ -477,6 +486,166 @@ func writeBatchAccountRefresh(w http.ResponseWriter, r *http.Request, siteServic
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_, _ = w.Write(sanitizeJSONForBrowser(data))
+}
+
+func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
+	now := time.Now()
+	requestQuery := r.URL.Query()
+	query := url.Values{}
+	startDate := strings.TrimSpace(requestQuery.Get("start_date"))
+	endDate := strings.TrimSpace(requestQuery.Get("end_date"))
+	granularity := strings.TrimSpace(requestQuery.Get("granularity"))
+	if startDate == "" {
+		startDate = now.AddDate(0, 0, -7).Format("2006-01-02")
+	}
+	if endDate == "" {
+		endDate = now.Format("2006-01-02")
+	}
+	if granularity != "hour" {
+		granularity = "day"
+	}
+	query.Set("start_date", startDate)
+	query.Set("end_date", endDate)
+	query.Set("granularity", granularity)
+	query.Set("include_stats", "true")
+	query.Set("include_trend", "true")
+	query.Set("include_model_stats", "true")
+	query.Set("include_group_stats", "false")
+	query.Set("include_users_trend", "true")
+	query.Set("users_trend_limit", "12")
+
+	snapshot, snapshotStatus, snapshotErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/dashboard/snapshot-v2", query)
+	stats, statsStatus, statsErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/dashboard/stats", nil)
+	rankingQuery := url.Values{}
+	rankingQuery.Set("start_date", startDate)
+	rankingQuery.Set("end_date", endDate)
+	rankingQuery.Set("limit", "12")
+	ranking, rankingStatus, rankingErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/dashboard/users-ranking", rankingQuery)
+	usersQuery := url.Values{}
+	usersQuery.Set("page", "1")
+	usersQuery.Set("page_size", "100")
+	usersQuery.Set("sort_by", "last_active_at")
+	usersQuery.Set("sort_order", "desc")
+	usersQuery.Set("include_subscriptions", "false")
+	usersConcurrency, usersConcurrencyStatus, usersConcurrencyErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/users", usersQuery)
+	userConcurrency, userConcurrencyStatus, userConcurrencyErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/ops/user-concurrency", nil)
+	opsConcurrency, opsConcurrencyStatus, opsConcurrencyErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/ops/concurrency", nil)
+	if snapshotErr != nil && statsErr != nil && rankingErr != nil && usersConcurrencyErr != nil && userConcurrencyErr != nil && opsConcurrencyErr != nil {
+		writeSiteError(w, snapshotErr)
+		return
+	}
+	result := map[string]any{
+		"snapshot":               decodeJSONValue(snapshot),
+		"snapshotStatus":         snapshotStatus,
+		"stats":                  decodeJSONValue(stats),
+		"statsStatus":            statsStatus,
+		"ranking":                decodeJSONValue(ranking),
+		"rankingStatus":          rankingStatus,
+		"usersConcurrency":       projectUsersConcurrency(usersConcurrency),
+		"usersConcurrencyStatus": usersConcurrencyStatus,
+		"userConcurrency":        decodeJSONValue(userConcurrency),
+		"userConcurrencyStatus":  userConcurrencyStatus,
+		"opsConcurrency":         decodeJSONValue(opsConcurrency),
+		"opsConcurrencyStatus":   opsConcurrencyStatus,
+		"range": map[string]string{
+			"start_date":  startDate,
+			"end_date":    endDate,
+			"granularity": granularity,
+		},
+		"notes": []string{
+			"官方管理仪表盘主页面使用 dashboard/snapshot-v2 聚合 stats、trend、models 和 users_trend。",
+			"snapshot-v2.stats 包含 active_users、hourly_active_users、rpm、tpm、today_account_cost、total_account_cost 等字段。",
+			"用户排行来自 dashboard/users-ranking；趋势、模型分布和用户趋势来自 snapshot-v2。",
+			"当前用户并发优先使用 Ops user-concurrency，依赖 sub2api Ops 实时监控开关。",
+			"最近活跃前 100 个用户的 current_concurrency 字段作为备用来源。",
+			"账号并发来自 ops/concurrency，依赖 sub2api Ops 实时监控开关。",
+		},
+	}
+	if snapshotErr != nil {
+		result["snapshotError"] = snapshotErr.Error()
+	}
+	if statsErr != nil {
+		result["statsError"] = statsErr.Error()
+	}
+	if rankingErr != nil {
+		result["rankingError"] = rankingErr.Error()
+	}
+	if usersConcurrencyErr != nil {
+		result["usersConcurrencyError"] = usersConcurrencyErr.Error()
+	}
+	if userConcurrencyErr != nil {
+		result["userConcurrencyError"] = userConcurrencyErr.Error()
+	}
+	if opsConcurrencyErr != nil {
+		result["opsConcurrencyError"] = opsConcurrencyErr.Error()
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func projectUsersConcurrency(data []byte) any {
+	decoded := decodeJSONValue(data)
+	payload, ok := decoded.(map[string]any)
+	if !ok {
+		return decoded
+	}
+	items, _ := payload["items"].([]any)
+	projected := make([]map[string]any, 0, len(items))
+	active := make([]map[string]any, 0)
+	for _, item := range items {
+		user, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		row := map[string]any{
+			"user_id":             user["id"],
+			"email":               user["email"],
+			"username":            user["username"],
+			"status":              user["status"],
+			"current_concurrency": user["current_concurrency"],
+			"concurrency":         user["concurrency"],
+		}
+		projected = append(projected, row)
+		if numericValue(user["current_concurrency"]) > 0 {
+			active = append(active, row)
+		}
+	}
+	return map[string]any{
+		"source": "admin/users",
+		"items":  projected,
+		"active": active,
+		"total":  payload["total"],
+		"page":   payload["page"],
+		"pages":  payload["pages"],
+	}
+}
+
+func numericValue(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case string:
+		parsed, _ := strconv.ParseFloat(v, 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func decodeJSONValue(data []byte) any {
+	if len(data) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return string(data)
+	}
+	return value
 }
 
 func summarizeAccountTestSSE(body string) (bool, string, string, string, string) {
