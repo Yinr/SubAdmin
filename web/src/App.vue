@@ -41,6 +41,7 @@ const batchTestResults = ref<Record<string, unknown>[]>([])
 const batchRefreshResult = ref<Record<string, unknown> | null>(null)
 const statistics = ref<Record<string, unknown> | null>(null)
 const batchTestJob = ref<JobRecord | null>(null)
+const recentJobs = ref<JobRecord[]>([])
 const batchTestScroll = ref<HTMLElement | null>(null)
 const batchRefreshScroll = ref<HTMLElement | null>(null)
 const selectedAccountIds = ref<Set<string>>(new Set())
@@ -61,6 +62,7 @@ const statsLoading = ref(false)
 const batchTesting = ref(false)
 const batchRefreshing = ref(false)
 const batchCollecting = ref(false)
+const jobsLoading = ref(false)
 const activeView = ref<ViewMode>('stats')
 const statsError = ref('')
 const batchTestTotal = ref(0)
@@ -352,7 +354,10 @@ async function refreshMe() {
   const data = await api<{ authenticated: boolean; expiresAt?: string }>('api/auth/me')
   authed.value = data.authenticated
   expiresAt.value = data.expiresAt || ''
-  if (authed.value) await loadSites()
+  if (authed.value) {
+    await loadSites()
+    await loadRecentJobs()
+  }
 }
 
 async function login() {
@@ -852,6 +857,18 @@ async function loadAccounts(options: { force?: boolean } = {}) {
       accountQuerySlow.value = false
       stopAccountQueryTimer()
     }
+  }
+}
+
+async function loadRecentJobs() {
+  jobsLoading.value = true
+  try {
+    const payload = await api<{ items: JobRecord[] }>('api/jobs')
+    recentJobs.value = (payload.items || []).slice(0, 10)
+  } catch (error) {
+    batchTestError.value = error instanceof Error ? error.message : '加载 Jobs 失败'
+  } finally {
+    jobsLoading.value = false
   }
 }
 
@@ -1384,6 +1401,7 @@ async function testAccountIDs(ids: number[]) {
       body: JSON.stringify({ ids, ...batchTestForm }),
     })
     await pollBatchTestJob(Number(job.id))
+    await loadRecentJobs()
   } catch (error) {
     batchTestError.value = error instanceof Error ? error.message : '批量检测失败'
   } finally {
@@ -1398,6 +1416,22 @@ async function pollBatchTestJob(jobId: number) {
     updateBatchTestJob(job)
     if (!['queued', 'running'].includes(String(job.status))) return
     await waitForBatchPoll()
+  }
+}
+
+async function openJobResult(job: JobRecord) {
+  const id = Number(job.id)
+  if (!id) return
+  try {
+    const detail = await api<JobRecord>(`api/jobs/${id}`)
+    updateBatchTestJob(detail)
+    const result = detail.result as Record<string, unknown> | undefined
+    const items = Array.isArray(result?.items) ? result.items as Record<string, unknown>[] : []
+    batchTestResults.value = items
+    batchTestTotal.value = Number(detail.totalCount || items.length || 0)
+    batchTestDone.value = Number(detail.doneCount || items.length || 0)
+  } catch (error) {
+    batchTestError.value = error instanceof Error ? error.message : '加载 Job 详情失败'
   }
 }
 
@@ -1424,11 +1458,17 @@ async function retryFailedBatchJob() {
     const job = await api<JobRecord>(`api/jobs/${id}/retry-failed`, { method: 'POST', body: '{}' })
     batchTestResults.value = failedBatchTestIDs.value.map((accountId) => ({ id: accountId, pending: true, message: '等待检测...' }))
     await pollBatchTestJob(Number(job.id))
+    await loadRecentJobs()
   } catch (error) {
     batchTestError.value = error instanceof Error ? error.message : '重试失败项失败'
   } finally {
     batchTesting.value = false
   }
+}
+
+async function retryFailedJobFromList(job: JobRecord) {
+  await openJobResult(job)
+  await retryFailedBatchJob()
 }
 
 function updateBatchTestJob(job: JobRecord) {
@@ -1441,6 +1481,25 @@ function updateBatchTestJob(job: JobRecord) {
     const itemMap = new Map(items.map((item) => [String(item.id), item]))
     batchTestResults.value = batchTestResults.value.map((item) => itemMap.get(String(item.id)) || item)
   }
+}
+
+function jobProgress(job: JobRecord) {
+  return progressPercent(Number(job.doneCount || 0), Number(job.totalCount || 0))
+}
+
+function jobStatusLabel(status: unknown) {
+  const value = String(status || '')
+  if (value === 'queued') return '排队中'
+  if (value === 'running') return '运行中'
+  if (value === 'succeeded') return '成功'
+  if (value === 'failed') return '失败'
+  if (value === 'cancelled') return '已取消'
+  return value || '未知'
+}
+
+function jobTypeLabel(type: unknown) {
+  if (type === 'batch_account_test') return '批量检测'
+  return String(type || '未知')
 }
 
 function waitForBatchPoll() {
@@ -2024,6 +2083,42 @@ onUnmounted(() => {
                       <button class="secondary mini" type="button" :title="batchResultSummary(result)" @click="openBatchTestDetail(result)">查看详情</button>
                     </td>
                   </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section class="batch-results result-panel">
+            <div class="panel-head">
+              <div>
+                <h2>最近 Jobs</h2>
+                <p class="muted">展示最近 10 个批量任务，刷新页面后也可回看结果。</p>
+              </div>
+              <div class="actions compact-actions">
+                <button class="secondary" :disabled="jobsLoading" @click="loadRecentJobs">{{ jobsLoading ? '加载中...' : '刷新 Jobs' }}</button>
+              </div>
+            </div>
+            <div class="result-scroll table-wrap jobs-scroll">
+              <table class="account-table result-table">
+                <thead><tr><th>Job</th><th>类型</th><th>状态</th><th>进度</th><th>结果</th><th>创建时间</th><th>操作</th></tr></thead>
+                <tbody>
+                  <tr v-for="job in recentJobs" :key="String(job.id)">
+                    <td>#{{ job.id }}</td>
+                    <td>{{ jobTypeLabel(job.type) }}</td>
+                    <td>{{ jobStatusLabel(job.status) }}</td>
+                    <td>
+                      <div class="usage-row compact-progress">
+                        <div class="usage-bar-shell"><div class="usage-bar" :style="{ width: `${jobProgress(job)}%` }"></div></div>
+                        <strong class="usage-value">{{ job.doneCount || 0 }} / {{ job.totalCount || 0 }}</strong>
+                      </div>
+                    </td>
+                    <td>{{ job.successCount || 0 }} 成功 / {{ job.failedCount || 0 }} 失败</td>
+                    <td>{{ formatDateTime(Number(job.createdAt || 0) * 1000) }}</td>
+                    <td class="row-actions">
+                      <button class="secondary mini" @click="openJobResult(job)">查看结果</button>
+                      <button class="secondary mini" :disabled="Number(job.failedCount || 0) <= 0 || batchTesting" @click="retryFailedJobFromList(job)">重试失败</button>
+                    </td>
+                  </tr>
+                  <tr v-if="!recentJobs.length"><td colspan="7" class="muted">暂无 Job 记录。</td></tr>
                 </tbody>
               </table>
             </div>
