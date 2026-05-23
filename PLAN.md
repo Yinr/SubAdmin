@@ -4,7 +4,7 @@
 
 SubAdmin is a lightweight management panel for sub2api. It acts as a server-side BFF: the browser talks only to SubAdmin, and SubAdmin talks to sub2api admin APIs with credentials stored server-side.
 
-The near-term priority is a safe read-only management experience plus low-risk account maintenance. Destructive operations and account mutations come later and must include preview, confirmation, job tracking, and audit logs.
+The current product focus is safe read-only management, low-risk account maintenance, and auditable batch workflows. Destructive operations and broad account mutations must remain behind preview, confirmation, job tracking, and audit logs.
 
 ## Security Baseline
 
@@ -13,188 +13,177 @@ The near-term priority is a safe read-only management experience plus low-risk a
 - Use HttpOnly session cookies for SubAdmin login sessions.
 - Store only session token hashes in SQLite.
 - Redact sensitive upstream account fields before returning account data to the browser.
-- Keep account write operations disabled until preview, confirmation, jobs, and audit logs exist.
+- Keep high-risk account write operations disabled until preview, confirmation, jobs, and audit logs exist.
+- Batch test response logs are opt-in only and must be written under `SUBADMIN_LOG_DIR`.
 
-## Phase 0: Foundations
+## Current Capabilities
 
-Status: complete.
+Status: usable for current read-only and low-risk maintenance workflows.
 
-- Repository structure for backend, frontend, docs, and persistent data.
-- Go backend entrypoint and config loading.
-- SQLite bootstrap and initial schema.
-- Session-cookie authentication.
-- Vue 3 + Vite frontend build pipeline.
-- Static frontend serving from Go backend, with fallback page when no build exists.
-- sub2api source included as a submodule.
+- Go backend serves the Vue SPA, protected API routes, and protected docs.
+- SQLite stores app data, site records, sessions, templates, jobs, and audit-log tables.
+- Single-secret login uses HttpOnly session cookies.
+- Site management supports encrypted sub2api admin-key storage, CRUD, default-site selection, and connection tests.
+- Top-level navigation includes Statistics, Accounts, Sites, and Docs.
+- A shared active-site context is used by Statistics and Accounts.
+- Account listing is proxied server-side and sensitive fields are redacted before browser responses.
+- Account filters support upstream query filters plus local current-page group/scheduling filters.
+- Account table/card UI is usable on desktop and mobile with detail modal, badges, chips, usage rows, and copy helpers.
+- Batch account testing runs through SubAdmin's server-side proxy, parses known SSE result formats, supports filtered selections, delay/jitter, retry helpers, and optional sanitized response logs.
+- Batch token refresh proxies sub2api's native batch-refresh endpoint with explicit confirmation.
+- Statistics dashboard uses real upstream dashboard and Ops endpoints where available, without fabricating missing data.
+- Protected docs are available inside the logged-in UI.
 
-## Phase 1: Site Management
+## Completed Scope Notes
 
-Status: complete for current scope.
-
-- Site CRUD APIs and UI.
-- Encrypted site admin-key storage.
-- Admin-key hint only in API responses; plaintext keys are never returned.
-- Site connection test through server-side sub2api admin API calls.
-- Multi-site switching.
-- Modal save UX hardened so backdrop clicks do not discard edits.
-- Loading states for login, site loading, account loading, and site saves.
-
-## Phase 2: Account Listing And Read-Only Operations
-
-Status: in progress, mostly usable.
-
-Completed:
-
-- Read-only account-list proxy per site.
-- Server-side sensitive field redaction for account-list responses.
-- Account table with name, platform/status, groups, proxy/scheduling state, usage, and last-used time.
-- Pagination with page-size selector, total pages, unavailable-next-page handling, and page-size reset to page 1.
-- Short client-side cache for account queries.
-- Race protection so slow responses do not overwrite newer results.
-- Account detail modal based on the current list result, with redacted JSON.
-- Fixed option filters for platform, status, type, privacy mode, sorting, page size, and scheduling state.
-- Read-only groups proxy per site.
-- Upstream single-group filtering sends sub2api's supported `group` query parameter before local filtering.
-- Multi-group local tri-state filtering on the current result set:
-  - include: account must contain the group.
-  - exclude: account must not contain the group.
-  - ignored: group is not part of the filter list.
-- Lightweight dashboard overview cards based on loaded site/account data.
-- Account detail modal now has clearer read-only sections for basic info, groups/proxy, scheduling, usage, and errors.
-- Filter UI now separates upstream query filters from current-page local filters.
-- Copy helpers added for account ID, account name, and active filter summary.
-
-Next:
-- Account maintenance: batch testing for selected accounts.
-- Account table polish: replace dense text cells with structured badges, chips, compact metadata rows, and clearer status/usage/scheduling components.
-- Add account table ergonomics such as column visibility, sticky key columns, better mobile layout, and clearer empty/loading/error states.
-
-## Phase 3: Protected Docs Integration
+### Foundations And Site Management
 
 Status: complete for current scope.
 
-- Protected `/docs/` route added for existing Swagger UI assets.
-- Frontend overview card links to Swagger UI, OpenAPI YAML, and AI Reference.
-- Logged-in docs page added inside the SubAdmin UI.
-- AI Reference is fetched through the protected docs route and rendered in-app.
-- Separate docs deployment is no longer required for current bundled docs.
+The backend, frontend, SQLite bootstrap, encrypted site credentials, session auth, static serving, and multi-site CRUD are in place. No near-term feature work is planned here beyond hardening.
 
-## Phase 4: Account Maintenance - Batch Testing
+### Account Listing And Read-Only Operations
 
-Status: in progress. This phase is read-only from SubAdmin's perspective and reuses upstream account test endpoints.
+Status: complete for current scope.
 
-Completed:
+The account page is usable for listing, filtering, inspecting redacted details, selecting accounts, and launching supported batch actions. Future work should be driven by concrete UX pain rather than more table polish.
 
-- Select accounts from the current account table.
-- Run batch tests for selected accounts.
-- Reuse sub2api's existing single-account test endpoint for each account.
-- Keep a conservative batch limit of 20 accounts and sequential execution in the first version.
-- Show per-account test results with success/failure, status code, duration, and sanitized response text.
-- Batch test options include optional model id, prompt, and mode; empty model uses sub2api's default test model.
-- Batch test results now parse upstream SSE events to report success/error and tested model.
-- Frontend runs selected account tests one by one and updates each row as it completes.
-- Batch test result helpers added for copying failed account IDs and retrying failed items only.
-- Batch test result parser recognizes known rate-limit signals such as 429, usage_limit_reached, resets_at, retry_after, and rate_limit_reset_at.
-- Batch test parser now handles OpenAI-style 429 usage limit payloads with `plan_type`, Unix `resets_at`, and `resets_in_seconds`.
-- Batch testing supports configurable per-account delay with random jitter for smoother upstream load.
-- Batch testing auto-raises the minimum inter-request delay for large selections.
-- Batch testing can collect and test all accounts matching the current upstream and local filters, not only the current page.
-- Batch token refresh proxies sub2api `/api/v1/admin/accounts/batch-refresh` for selected or filtered accounts with explicit confirmation.
-- Batch operation panels now appear before the account table with progress bars, bounded scroll areas, auto-scroll, and cached filtered ID sets.
-- Batch test response logs are off by default; when enabled, sanitized logs can be written under the project-root log directory configured by `SUBADMIN_LOG_DIR`.
+### Protected Docs
 
-Next:
+Status: complete for current scope.
 
-- Promote batch tests into persisted Jobs with retry and history.
-- Optional later polish after core workflows are stable: export batch test results, retry a single failure category, and expand known-error classification for clearer summaries.
+OpenAPI, Swagger UI, and AI reference docs are available behind SubAdmin login.
 
-## Phase 4.5: Recent Status Statistics
+### Recent Status Statistics
 
-Status: next priority.
+Status: complete for current scope.
 
-Navigation model:
+The statistics page now covers the useful real data that sub2api exposes reliably: dashboard snapshot, trends, model distribution, user ranking, user concurrency, and account concurrency. Previously considered realtime fields that are unavailable, mock-only, or unreliable should not be shown unless upstream support changes.
 
-- Split site selection/settings from account operations.
-- Keep a shared active site context used by the statistics page and account management page.
-- If a default site exists, enter the statistics page directly after login and use that default site.
-- If no default site exists, route the user to site selection/settings first.
-- Account management should use the shared active site and only query accounts when the user explicitly clicks query/refresh.
+## Next Priority: Persisted Jobs
 
-- Add a status statistics page/panel for recent runtime activity.
-- Show active users and each user's concurrent connection count.
-- Show active upstream accounts and each upstream account's concurrent usage count.
-- Show recent user usage summaries with 1/5/10/30 minute and 1 hour windows.
-- Prefer server-side aggregation so the browser does not need to pull excessive raw usage rows.
-- Add top-level navigation for Statistics, Accounts, Sites/Settings, and Docs.
+Status: design next, implementation after review.
 
-## Phase 5: Import Preview Workflow
+Persisted Jobs turn long or batch operations from front-end-only transient actions into server-tracked records. The immediate target is batch account testing; the same structure should later support batch refresh, import preview/execution, and higher-risk account operations.
 
-Status: planned. Preview first, no upstream writes initially.
+### Goals
 
-- Accept uploaded files and pasted text in sub2api-supported upstream account formats.
+- Keep batch workflows visible after refresh or navigation.
+- Store progress, result summaries, and per-item outcomes in SQLite.
+- Allow safe retry of failed items.
+- Provide a foundation for future audit logs and high-risk operations.
+- Keep the first version simple and single-process; do not introduce a queue service.
+
+### Non-Goals For First Version
+
+- No distributed workers.
+- No cron scheduler.
+- No parallel execution by default.
+- No destructive account mutations.
+- No long-term analytics over job history.
+
+### Job Types
+
+- `batch_account_test`: first implementation target.
+- `batch_token_refresh`: later migration from current immediate API.
+- `import_preview`: later, for upload/paste parsing without upstream writes.
+- `import_execute`: later, only after preview, confirmation, and audit logs exist.
+
+### Data Model
+
+Use the existing `jobs` table if its schema is sufficient; otherwise add the smallest migration needed.
+
+Minimum job fields:
+
+- `id`: integer primary key.
+- `type`: job type, such as `batch_account_test`.
+- `status`: `queued`, `running`, `succeeded`, `failed`, `cancelled`.
+- `site_id`: target site id.
+- `created_at`, `started_at`, `finished_at`.
+- `total_count`, `done_count`, `success_count`, `failure_count`.
+- `input_json`: sanitized job input, including account ids and options.
+- `summary_json`: sanitized final summary.
+- `error`: top-level failure reason.
+
+Per-item results can start as JSON in `summary_json` for the first implementation. If result size or querying becomes painful, add a `job_items` table with `job_id`, `target_id`, `status`, `duration_ms`, `result_json`, and `error`.
+
+### API Design
+
+- `POST /api/sites/{siteId}/jobs/batch-account-test`: create and start a batch test job.
+- `GET /api/jobs`: list recent jobs, newest first.
+- `GET /api/jobs/{id}`: get job details, progress, and per-item results.
+- `POST /api/jobs/{id}/retry-failed`: create a new job from failed item ids.
+- `POST /api/jobs/{id}/cancel`: best-effort cancellation for queued/running jobs.
+
+### Execution Model
+
+- First version can run in-process in a goroutine after creating the job row.
+- Use a context/cancel registry keyed by job id for best-effort cancellation while the process is alive.
+- Mark interrupted `running` jobs as `failed` on startup with an `interrupted by restart` error.
+- Execute account tests sequentially with the same conservative delay/jitter behavior already used by the frontend.
+- Persist progress after each item so refresh does not lose state.
+
+### UI Design
+
+- Add a small Jobs view or account-page Jobs panel.
+- Show recent jobs with type, site, status, progress, created time, and final counts.
+- Job detail shows item rows similar to the current batch test results table.
+- Keep current immediate batch-test UI initially, but route execution through Jobs.
+- Provide retry failed items from a completed failed/partial job.
+
+### Safety Rules
+
+- Store only sanitized inputs and outputs.
+- Do not store upstream credentials or raw sensitive response fields.
+- Keep response-log saving opt-in and separate from job persistence.
+- Require explicit confirmation for token refresh and future write operations.
+- Do not add high-risk writes until audit logs are implemented.
+
+### Implementation Steps
+
+1. Inspect current `jobs` schema and decide whether a migration is needed.
+2. Add a small backend job repository/service.
+3. Implement `batch_account_test` job creation, execution, progress updates, and detail retrieval.
+4. Update the frontend batch test flow to create a job and poll job status.
+5. Add retry-failed support by creating a new job from failed item ids.
+6. Add startup cleanup for interrupted jobs.
+
+## Later Planned Work
+
+### Import Preview Workflow
+
+Status: planned after Jobs foundation.
+
+- Accept uploaded files and pasted text in known sub2api account formats.
 - Parse input server-side and return a preview only.
 - Show recognized accounts, platform/type, missing fields, duplicate risks, and validation warnings.
 - Apply draft import settings such as default group, proxy, priority, concurrency, and naming rules.
-- Do not call upstream write APIs until explicit confirmation and job/audit infrastructure exist.
+- Do not call upstream write APIs until explicit confirmation and job/audit infrastructure exists.
 
-## Phase 6: Import Templates
+### Import Templates
 
 Status: planned.
 
 - Store reusable import templates in SQLite.
-- Template fields may include default platform, account type, group, proxy, priority, concurrency, notes, and naming rules.
 - Use templates during import preview before any write operation is allowed.
 
-## Phase 7: Jobs And Audit Logs
+### Audit Logs And High-Risk Operations
 
 Status: planned and required before risky write operations.
 
-- Jobs page for import previews, import execution, and batch operations.
-- Audit logs for site changes, import actions, and account write operations.
-- Record action, site, target identifiers, timestamp, session/IP metadata, and result.
-- Keep audit records for failed and cancelled operations too.
+- Record site changes, import actions, account write operations, and job actions.
+- Include action, site, target identifiers, timestamp, session/IP metadata, and result.
+- Require preview, confirmation, job tracking, and audit entries before high-risk account mutations.
 
-## Phase 8: Account Management And Batch Operations
-
-Status: planned after Phase 6.
-
-Low-risk candidates:
-
-- Refresh account status or usage.
-- Clear account error state.
-- Clear rate limits.
-
-High-risk candidates:
-
-- Change groups, status, schedule, proxy, priority, rate, name, or note.
-- Delete accounts.
-- Batch update selected or filtered accounts.
-
-Requirements for high-risk operations:
-
-- Preview affected accounts.
-- Explicit confirmation.
-- Job tracking.
-- Audit log entry.
-- Conservative limits and clear error reporting.
-
-## Phase 9: Hardening And Polish
+### Hardening And Polish
 
 Status: ongoing.
 
-- Better operational logs and error messages.
-- Upload and batch-size limits.
-- UI polish for mobile and dense data tables.
-- Account table redesign from text-heavy cells into structured visual components:
-  - platform/type/status badges;
-  - group chips with overflow handling;
-  - proxy and scheduling badges;
-  - usage meters or compact usage rows;
-  - last-used and error summaries with consistent formatting;
-  - optional column visibility and sticky identity/action columns.
-- Server-side aggregation where it reduces data transfer or makes filtering more correct.
-- Test coverage for auth, credential encryption, redaction, and proxy behavior.
+- Improve operational errors and validation.
+- Add upload and batch-size limits where needed.
+- Add targeted backend tests for auth, encryption, redaction, proxy behavior, and Jobs.
+- Refine dense UI areas only when concrete usability issues appear.
 
 ## Immediate Next Step
 
-Implement the shared active-site navigation model, then build the recent status statistics page/panel.
+Design review complete, then implement the minimum persisted Jobs path for `batch_account_test`.

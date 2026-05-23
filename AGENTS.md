@@ -39,5 +39,7 @@ This directory contains the management application for sub2api.
 ## Current Scope
 - Login by single management secret.
 - Multi-site switching.
-- Account import, listing, filtering, and batch actions.
+- Account listing, filtering, batch testing, and batch token refresh.
+- Statistics dashboard based on real upstream dashboard and Ops data.
+- Persisted Jobs design and implementation for batch workflows.
 - Protected docs page for logged-in users.
