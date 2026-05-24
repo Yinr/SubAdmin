@@ -720,6 +720,13 @@ func (m *jobManager) runBatchAccountTest(ctx context.Context, jobID, siteID int6
 		}
 		result := runAccountTest(ctx, m.siteService, m.logDir, siteID, accountID, input)
 		applyAccountMeta(result, input.AccountMeta)
+		if ctx.Err() != nil {
+			items = append(items, result)
+			failedCount++
+			_ = m.updateJobProgress(jobID, items, successCount, failedCount)
+			_ = m.finishJob(jobID, "cancelled", items, successCount, failedCount, ctx.Err().Error())
+			return
+		}
 		if result["ok"] == true {
 			successCount++
 		} else {
@@ -747,6 +754,12 @@ func (m *jobManager) runBatchTokenRefresh(ctx context.Context, jobID, siteID int
 		"account_ids": input.IDs,
 	})
 	durationMS := time.Since(started).Milliseconds()
+	if ctx.Err() != nil {
+		items := buildTokenRefreshItems(input.IDs, input.AccountMeta, statusCode, durationMS, data, ctx.Err())
+		_ = m.updateJobProgress(jobID, items, 0, len(items))
+		_ = m.finishJob(jobID, "cancelled", items, 0, len(items), ctx.Err().Error())
+		return
+	}
 	items := buildTokenRefreshItems(input.IDs, input.AccountMeta, statusCode, durationMS, data, err)
 	successCount, failedCount := countJobItems(items)
 	_ = m.updateJobProgress(jobID, items, successCount, failedCount)
@@ -964,7 +977,6 @@ func (m *jobManager) cancel(ctx context.Context, id int64) (*jobRecord, error) {
 	m.mu.Unlock()
 	if cancel != nil {
 		cancel()
-		return m.get(ctx, id)
 	}
 	now := time.Now().Unix()
 	res, err := m.db.ExecContext(ctx, `UPDATE jobs SET status = 'cancelled', error_message = 'cancelled', finished_at = ? WHERE id = ? AND status IN ('queued', 'running')`, now, id)

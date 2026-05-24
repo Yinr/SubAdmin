@@ -1552,11 +1552,35 @@ async function cancelBatchTestJob() {
   try {
     const job = await api<JobRecord>(`api/jobs/${id}/cancel`, { method: 'POST', body: '{}' })
     updateBatchTestJob(job)
+    if (job.type === 'batch_token_refresh') updateBatchRefreshJob(job)
+    await loadRecentJobs()
   } catch (error) {
-    batchTestError.value = error instanceof Error ? error.message : '取消批量检测失败'
+    batchTestError.value = error instanceof Error ? error.message : '取消任务失败'
   } finally {
     batchTesting.value = false
+    batchRefreshing.value = false
     stopBatchTestPollTimer()
+  }
+}
+
+async function cancelJobFromList(job: JobRecord) {
+  const id = Number(job.id)
+  if (!id || !isJobCancellable(job)) return
+  if (!window.confirm(`确定取消任务 #${id} 吗？`)) return
+  batchTestError.value = ''
+  try {
+    const cancelled = await api<JobRecord>(`api/jobs/${id}/cancel`, { method: 'POST', body: '{}' })
+    recentJobs.value = recentJobs.value.map((item) => Number(item.id) === id ? cancelled : item)
+    if (Number(batchTestJob.value?.id) === id) {
+      updateBatchTestJob(cancelled)
+      if (cancelled.type === 'batch_token_refresh') updateBatchRefreshJob(cancelled)
+      batchTesting.value = false
+      batchRefreshing.value = false
+      stopBatchTestPollTimer()
+    }
+    await loadRecentJobs()
+  } catch (error) {
+    batchTestError.value = error instanceof Error ? error.message : '取消任务失败'
   }
 }
 
@@ -1610,6 +1634,10 @@ function jobStatusLabel(status: unknown) {
   if (value === 'failed') return '失败'
   if (value === 'cancelled') return '已取消'
   return value || '未知'
+}
+
+function isJobCancellable(job: JobRecord) {
+  return ['queued', 'running'].includes(String(job.status || ''))
 }
 
 function jobTypeLabel(type: unknown) {
@@ -2019,7 +2047,8 @@ onUnmounted(() => {
                   <td>{{ formatDateTime(job.createdAt) }}</td>
                   <td class="row-actions">
                     <button class="secondary mini" @click="openJobResult(job)">查看结果</button>
-                    <button class="secondary mini" :disabled="Number(job.failedCount || 0) <= 0 || batchTesting" @click="retryFailedJobFromList(job)">重试失败</button>
+                    <button class="secondary mini" :disabled="Number(job.failedCount || 0) <= 0 || batchTesting || batchRefreshing" @click="retryFailedJobFromList(job)">重试失败</button>
+                    <button class="secondary mini" :disabled="!isJobCancellable(job)" @click="cancelJobFromList(job)">取消任务</button>
                   </td>
                 </tr>
                 <tr v-if="!recentJobs.length"><td colspan="7" class="muted">暂无任务记录。</td></tr>
@@ -2312,7 +2341,7 @@ onUnmounted(() => {
               </div>
               <div class="actions compact-actions">
                 <button class="secondary" @click="copyText(JSON.stringify(batchTestResults, null, 2), '检测结果')">复制结果</button>
-                <button class="secondary" :disabled="!batchTesting || !batchTestJob" @click="cancelBatchTestJob">取消任务</button>
+              <button class="secondary" :disabled="(!batchTesting && !batchRefreshing) || !batchTestJob" @click="cancelBatchTestJob">取消任务</button>
                 <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="copyFailedBatchTestIDs">复制失败账号 ID</button>
                 <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="retryFailedBatchTests">只重试失败项</button>
               </div>

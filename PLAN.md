@@ -14,188 +14,114 @@ The current product focus is safe read-only management, low-risk account mainten
 - Store only session token hashes in SQLite.
 - Redact sensitive upstream account fields before returning account data to the browser.
 - Keep high-risk account write operations disabled until preview, confirmation, jobs, and audit logs exist.
-- Batch test response logs are opt-in only and must be written under `SUBADMIN_LOG_DIR`.
+- Keep batch test response logs opt-in only and write them under `SUBADMIN_LOG_DIR`.
 
-## Current Capabilities
+## Current Status
 
-Status: usable for current read-only and low-risk maintenance workflows.
+Status: usable for safe read-only management and low-risk account maintenance.
+
+Implemented capabilities:
 
 - Go backend serves the Vue SPA, protected API routes, and protected docs.
-- SQLite stores app data, site records, sessions, templates, jobs, and audit-log tables.
-- Single-secret login uses HttpOnly session cookies.
+- SQLite stores sites, sessions, app settings, import-template schema, jobs, and audit-log schema.
+- Single-secret login uses HttpOnly session cookies and hashed session tokens.
 - Site management supports encrypted sub2api admin-key storage, CRUD, default-site selection, and connection tests.
 - Top-level navigation includes Statistics, Accounts, Sites, Jobs, and Docs.
-- A shared active-site context is used by Statistics and Accounts.
 - Account listing is proxied server-side and sensitive fields are redacted before browser responses.
 - Account filters support upstream query filters plus local current-page group/scheduling filters.
-- Account table/card UI is usable on desktop and mobile with detail modal, badges, chips, usage rows, and copy helpers.
-- Batch account testing runs through persisted Jobs, parses known SSE result formats, supports filtered selections, delay/jitter, failure retry, and optional sanitized response logs.
-- Batch token refresh runs through persisted Jobs, proxies sub2api's native batch-refresh endpoint with explicit confirmation, stores per-account outcomes, and supports failed-item retry.
-- Statistics dashboard uses real upstream dashboard and Ops endpoints where available, defaults to a 24h range, and supports isolated refresh for user/account concurrency panels without refreshing the whole dashboard.
-- Protected docs are available inside the logged-in UI.
+- Account UI supports desktop tables, mobile cards, detail modal, badges, usage rows, copy helpers, and batch selection.
+- Batch account testing runs through persisted Jobs with progress, per-item results, optional sanitized response logs, failed-item retry, and best-effort cancellation.
+- Batch token refresh runs through persisted Jobs, proxies sub2api's native batch-refresh endpoint with explicit confirmation, stores per-account outcomes, supports failed-item retry, and supports best-effort cancellation.
+- Jobs view lists recent jobs, reopens batch-test/token-refresh results, retries failed items, and cancels queued/running jobs.
+- Statistics dashboard uses real upstream dashboard and Ops endpoints, defaults to 24h/hourly, and supports isolated refresh for user/account concurrency panels.
+- Protected OpenAPI, Swagger UI, and AI reference docs are available inside the logged-in UI.
 
-## Completed Scope Notes
+## Completed Areas
 
-### Foundations And Site Management
+The following areas are complete for the current scope and should only change for hardening, concrete UX issues, or upstream API changes:
 
-Status: complete for current scope.
+- Foundations: backend entrypoint, SPA serving, SQLite bootstrap, config, session auth, protected routes.
+- Site management: encrypted credentials, CRUD, default site, connection tests.
+- Read-only account management: list, filters, redacted details, responsive UI, copy helpers.
+- Low-risk batch maintenance: account testing and token refresh through Jobs.
+- Jobs foundation: persisted job rows, progress/result JSON, retry failed, cancel queued/running, restart cleanup.
+- Statistics: real dashboard/Ops data only, no mock-only fields.
+- Protected docs: OpenAPI, Swagger UI, AI reference.
 
-The backend, frontend, SQLite bootstrap, encrypted site credentials, session auth, static serving, and multi-site CRUD are in place. No near-term feature work is planned here beyond hardening.
+Keep completed implementation details out of this plan unless they affect future design decisions.
 
-### Account Listing And Read-Only Operations
+## Current Limitations
 
-Status: complete for current scope.
+- `import_templates` and `audit_logs` tables exist, but there is no complete UI/API workflow using them yet.
+- Jobs are single-process goroutines; there is no distributed worker, durable queue, cron scheduler, or parallel execution model.
+- Per-item job outcomes are stored in `result_json`; there is no `job_items` table yet.
+- Filtered account ID collection is still frontend-driven because upstream and local filter semantics are not fully reproducible server-side.
+- Token refresh cancellation is best-effort: SubAdmin can cancel local tracking/request state, but it cannot roll back upstream refresh work already performed by sub2api.
+- High-risk account writes and import execution remain disabled until preview, confirmation, job tracking, and audit logging are implemented.
 
-The account page is usable for listing, filtering, inspecting redacted details, selecting accounts, and launching supported batch actions. Future work should be driven by concrete UX pain rather than more table polish.
+## Next Priority: Import Preview
 
-### Protected Docs
+Goal: let operators upload or paste account definitions, parse them server-side, and review a safe preview without writing to upstream sub2api.
 
-Status: complete for current scope.
+First implementation scope:
 
-OpenAPI, Swagger UI, and AI reference docs are available behind SubAdmin login.
+- Accept pasted text and small uploaded files in known sub2api account formats.
+- Parse input server-side only.
+- Return recognized accounts, platform/type, display name, group hints, missing required fields, duplicate risks, and validation warnings.
+- Allow draft import settings such as default group, proxy, priority, concurrency, and naming rules.
+- Store no upstream credentials in browser storage.
+- Do not call upstream write APIs.
+- Do not create accounts.
 
-### Recent Status Statistics
+Suggested API shape:
 
-Status: complete for current scope.
+- `POST /api/sites/{siteId}/imports/preview`: parse upload/paste input and return a preview payload.
+- `GET /api/import-templates`: list saved templates after template support exists.
+- `POST /api/import-templates`: save reusable import defaults after preview is stable.
 
-The statistics page now covers the useful real data that sub2api exposes reliably: dashboard snapshot, trends, model distribution, user ranking, user concurrency, and account concurrency. The default range is 24h/hourly, and user/account concurrency can be refreshed independently through lightweight Ops proxy endpoints. Previously considered realtime fields that are unavailable, mock-only, or unreliable should not be shown unless upstream support changes.
+Suggested UI shape:
 
-## Completed Scope Notes: Persisted Jobs
+- Add an Import page or an Accounts-page Import panel.
+- Show parse summary, validation warnings, duplicate risks, and recognized account rows.
+- Keep a clear disabled/absent execution action until audit logging and confirmation are ready.
 
-Status: complete for current scope for `batch_account_test` and `batch_token_refresh`.
-
-Persisted Jobs turn long or batch operations from front-end-only transient actions into server-tracked records. The current implementation covers batch account testing and batch token refresh. The same structure should later support import preview/execution and higher-risk account operations.
-
-### Goals
-
-- Keep batch workflows visible after refresh or navigation.
-- Store progress, result summaries, and per-item outcomes in SQLite.
-- Allow safe retry of failed items.
-- Provide a foundation for future audit logs and high-risk operations.
-- Keep the first version simple and single-process; do not introduce a queue service.
-
-### Non-Goals For First Version
-
-- No distributed workers.
-- No cron scheduler.
-- No parallel execution by default.
-- No destructive account mutations.
-- No long-term analytics over job history.
-
-### Job Types
-
-- `batch_account_test`: implemented.
-- `batch_token_refresh`: implemented and migrated from the previous immediate API.
-- `import_preview`: later, for upload/paste parsing without upstream writes.
-- `import_execute`: later, only after preview, confirmation, and audit logs exist.
-
-### Data Model
-
-Use the existing `jobs` table if its schema is sufficient; otherwise add the smallest migration needed.
-
-Minimum job fields:
-
-- `id`: integer primary key.
-- `type`: job type, such as `batch_account_test`.
-- `status`: `queued`, `running`, `succeeded`, `failed`, `cancelled`.
-- `site_id`: target site id.
-- `created_at`, `started_at`, `finished_at`.
-- `total_count`, `done_count`, `success_count`, `failure_count`.
-- `input_json`: sanitized job input, including account ids and options.
-- `summary_json`: sanitized final summary.
-- `error`: top-level failure reason.
-
-Per-item results can start as JSON in `summary_json` for the first implementation. If result size or querying becomes painful, add a `job_items` table with `job_id`, `target_id`, `status`, `duration_ms`, `result_json`, and `error`.
-
-### API Design
-
-- `POST /api/sites/{siteId}/jobs/batch-account-test`: create and start a batch test job.
-- `POST /api/sites/{siteId}/jobs/batch-token-refresh`: create and start a batch token refresh job.
-- `GET /api/jobs`: list recent jobs, newest first.
-- `GET /api/jobs/{id}`: get job details, progress, and per-item results.
-- `POST /api/jobs/{id}/retry-failed`: create a new job from failed item ids.
-- `POST /api/jobs/{id}/cancel`: best-effort cancellation for queued/running jobs.
-
-### Execution Model
-
-- First version can run in-process in a goroutine after creating the job row.
-- Use a context/cancel registry keyed by job id for best-effort cancellation while the process is alive.
-- Mark interrupted `running` jobs as `failed` on startup with an `interrupted by restart` error.
-- Execute account tests sequentially with the same conservative delay/jitter behavior already used by the frontend.
-- Execute token refresh through sub2api's native batch-refresh endpoint and store sanitized per-account outcome rows in the job result.
-- Persist account-test progress after each item and token-refresh results when the upstream batch call returns, so refresh/navigation does not lose completed job state.
-
-### UI Design
-
-- A top-level Jobs view shows recent jobs with type, site, status, progress, created time, and final counts.
-- Job detail can reopen account-test and token-refresh result rows from persisted job state.
-- Account-page batch test and token-refresh actions create jobs and poll job status.
-- Failed items can be retried from completed failed/partial account-test and token-refresh jobs.
-
-### Safety Rules
-
-- Store only sanitized inputs and outputs.
-- Do not store upstream credentials or raw sensitive response fields.
-- Keep response-log saving opt-in and separate from job persistence.
-- Require explicit confirmation for token refresh and future write operations.
-- Do not add high-risk writes until audit logs are implemented.
-
-### Implementation Steps
-
-1. Inspect current `jobs` schema and decide whether a migration is needed. Done: add `done_count` only.
-2. Add a small backend job repository/service. Done in the backend entrypoint for the first version.
-3. Implement `batch_account_test` job creation, execution, progress updates, and detail retrieval. Done for the first version.
-4. Update the frontend batch test flow to create a job and poll job status. Done for the first version.
-5. Add retry-failed support by creating a new job from failed item ids. Done for the first version.
-6. Add startup cleanup for interrupted jobs. Done for queued/running jobs.
-7. Migrate `batch_token_refresh` to Jobs with explicit confirmation, upstream batch-refresh proxying, per-account outcomes, result reopening, and failed-item retry. Done for the first version.
-
-Current Jobs refinements:
-
-- A dedicated top-level Jobs view shows recent batch jobs and can reopen batch-test and token-refresh results.
-
-Next Jobs refinements:
-
-- Move job code out of `cmd/subadmin/main.go` if it grows beyond the current minimal implementation.
-- Add `job_items` only if result JSON becomes too large or hard to query.
-- Move filtered account ID collection into backend tasks only after upstream/local filter semantics can be reproduced server-side.
-
-## Later Planned Work
-
-### Import Preview Workflow
-
-Status: planned after Jobs foundation.
-
-- Accept uploaded files and pasted text in known sub2api account formats.
-- Parse input server-side and return a preview only.
-- Show recognized accounts, platform/type, missing fields, duplicate risks, and validation warnings.
-- Apply draft import settings such as default group, proxy, priority, concurrency, and naming rules.
-- Do not call upstream write APIs until explicit confirmation and job/audit infrastructure exists.
+## Planned After Import Preview
 
 ### Import Templates
 
-Status: planned.
+- Store reusable import defaults in SQLite.
+- Apply templates during import preview.
+- Keep templates server-side and avoid exposing sensitive credentials.
 
-- Store reusable import templates in SQLite.
-- Use templates during import preview before any write operation is allowed.
+### Audit Logs
 
-### Audit Logs And High-Risk Operations
+- Record site changes, import preview/execution, job actions, and future account write operations.
+- Include action, site, target identifiers/counts, timestamp, session/IP metadata, request summary, and result summary.
+- Redact sensitive fields before writing audit records.
 
-Status: planned and required before risky write operations.
+### Import Execution
 
-- Record site changes, import actions, account write operations, and job actions.
-- Include action, site, target identifiers, timestamp, session/IP metadata, and result.
-- Require preview, confirmation, job tracking, and audit entries before high-risk account mutations.
+- Only start after import preview and audit logs are in place.
+- Require explicit confirmation.
+- Execute through persisted Jobs.
+- Store per-item outcomes.
+- Support retry where safe.
+- Never bypass audit logging for upstream writes.
 
-### Hardening And Polish
+### High-Risk Account Operations
 
-Status: ongoing.
+- Keep disabled until preview, confirmation, Jobs, and audit logs are all in place.
+- Add operations incrementally and only with clear rollback/error semantics.
 
-- Improve operational errors and validation.
-- Add upload and batch-size limits where needed.
-- Add targeted backend tests for auth, encryption, redaction, proxy behavior, and Jobs.
+## Hardening Backlog
+
+- Move job code out of `cmd/subadmin/main.go` if it grows further.
+- Add `job_items` only if `result_json` becomes too large or hard to query.
+- Add targeted backend tests for auth, encryption, redaction, proxy behavior, Jobs, and import preview parsing.
+- Add upload size and batch size limits for import preview.
+- Improve operational error messages around upstream timeouts and partial failures.
 - Refine dense UI areas only when concrete usability issues appear.
 
 ## Immediate Next Step
 
-Begin import preview design/implementation on top of the completed Jobs foundation, while keeping upstream writes disabled until confirmation and audit-log support are in place.
+Implement import preview with no upstream writes, then add audit-log recording before any import execution or other high-risk account mutations.
