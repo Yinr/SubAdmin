@@ -20,8 +20,16 @@ type Account = Record<string, unknown>
 type Group = Record<string, unknown>
 type JobRecord = Record<string, unknown>
 type GroupState = 'any' | 'include' | 'exclude'
-type ViewMode = 'stats' | 'accounts' | 'jobs' | 'sites' | 'docs'
+type ViewMode = 'stats' | 'accounts' | 'import' | 'jobs' | 'sites' | 'docs'
 type ApiOptions = RequestInit & { timeoutMs?: number }
+type ImportPreviewItem = Record<string, unknown>
+type ImportPreview = {
+  items: ImportPreviewItem[]
+  warnings: string[]
+  errors: string[]
+  summary: Record<string, unknown>
+  settings: Record<string, unknown>
+}
 
 const authed = ref(false)
 const expiresAt = ref('')
@@ -35,10 +43,12 @@ const docsError = ref('')
 const aiReference = ref('')
 const batchTestError = ref('')
 const batchRefreshError = ref('')
+const importError = ref('')
 const accounts = ref<Account[]>([])
 const groups = ref<Group[]>([])
 const batchTestResults = ref<Record<string, unknown>[]>([])
 const batchRefreshResult = ref<Record<string, unknown> | null>(null)
+const importPreview = ref<ImportPreview | null>(null)
 const statistics = ref<Record<string, unknown> | null>(null)
 const batchTestJob = ref<JobRecord | null>(null)
 const recentJobs = ref<JobRecord[]>([])
@@ -65,6 +75,7 @@ const batchTesting = ref(false)
 const batchRefreshing = ref(false)
 const batchCollecting = ref(false)
 const jobsLoading = ref(false)
+const importLoading = ref(false)
 const activeView = ref<ViewMode>('stats')
 const statsError = ref('')
 const batchTestTotal = ref(0)
@@ -116,6 +127,16 @@ const batchTestForm = reactive({
   delayMs: 0,
   jitterMs: 0,
   logResponses: false,
+})
+
+const importForm = reactive({
+  text: '',
+  filename: '',
+  defaultGroup: '',
+  proxy: '',
+  priority: '',
+  concurrency: '',
+  namePrefix: '',
 })
 
 const scheduleQuickFilter = ref('all')
@@ -927,6 +948,63 @@ async function loadRecentJobs() {
   }
 }
 
+async function previewImport() {
+  importError.value = ''
+  importPreview.value = null
+  if (!activeSiteId.value) {
+    importError.value = '请先选择站点'
+    return
+  }
+  if (!importForm.text.trim()) {
+    importError.value = '请先粘贴账号内容或选择文件'
+    return
+  }
+  importLoading.value = true
+  try {
+    importPreview.value = await api<ImportPreview>(`api/sites/${activeSiteId.value}/imports/preview`, {
+      method: 'POST',
+      body: JSON.stringify({
+        text: importForm.text,
+        filename: importForm.filename,
+        settings: importPreviewSettings(),
+      }),
+    })
+  } catch (error) {
+    importError.value = error instanceof Error ? error.message : '生成导入预览失败'
+  } finally {
+    importLoading.value = false
+  }
+}
+
+function importPreviewSettings() {
+  const settings: Record<string, unknown> = {}
+  ;(['defaultGroup', 'proxy', 'priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
+    const value = String(importForm[key] || '').trim()
+    if (value) settings[key] = value
+  })
+  return settings
+}
+
+async function handleImportFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  importError.value = ''
+  if (file.size > 2 * 1024 * 1024) {
+    importError.value = '文件不能超过 2 MiB'
+    input.value = ''
+    return
+  }
+  importForm.filename = file.name
+  importForm.text = await file.text()
+}
+
+function clearImportPreview() {
+  importPreview.value = null
+  importError.value = ''
+  Object.assign(importForm, { text: '', filename: '', defaultGroup: '', proxy: '', priority: '', concurrency: '', namePrefix: '' })
+}
+
 function stopAccountQueryTimer() {
   if (accountQueryTimer !== null) {
     window.clearInterval(accountQueryTimer)
@@ -1668,6 +1746,27 @@ function selectedTaskResultJSON() {
   return JSON.stringify(batchTestJob.value.result || {}, null, 2)
 }
 
+function importSummaryValue(key: string) {
+  return importPreview.value?.summary?.[key] ?? 0
+}
+
+function importItemStatus(item: ImportPreviewItem) {
+  return item.recognized ? '可预览' : '需修正'
+}
+
+function importItemStatusClass(item: ImportPreviewItem) {
+  return item.recognized ? 'tag tag-success' : 'tag tag-warning'
+}
+
+function importItemList(item: ImportPreviewItem, key: string) {
+  const value = item[key]
+  return Array.isArray(value) && value.length ? value.join(' / ') : '无'
+}
+
+function importItemName(item: ImportPreviewItem) {
+  return String(item.name || '未命名')
+}
+
 function waitForBatchPoll() {
   return new Promise((resolve) => {
     batchTestPollTimer = window.setTimeout(resolve, 1200)
@@ -1805,6 +1904,7 @@ onUnmounted(() => {
         <div class="topbar-actions">
           <button :class="activeView === 'stats' ? '' : 'secondary'" @click="showStats">统计</button>
           <button :class="activeView === 'accounts' ? '' : 'secondary'" @click="activeView = 'accounts'">账号</button>
+          <button :class="activeView === 'import' ? '' : 'secondary'" @click="activeView = 'import'">导入</button>
           <button :class="activeView === 'jobs' ? '' : 'secondary'" @click="showJobs">任务</button>
           <button :class="activeView === 'sites' ? '' : 'secondary'" @click="activeView = 'sites'">站点</button>
           <button :class="activeView === 'docs' ? '' : 'secondary'" @click="showDocs">文档</button>
@@ -2011,6 +2111,62 @@ onUnmounted(() => {
             </StatsTable>
           </ExpandablePanel>
         </div>
+      </section>
+
+      <section v-else-if="activeView === 'import'" class="panel content-panel">
+        <div class="panel-head">
+          <div>
+            <h2>导入预览</h2>
+            <p class="muted">仅解析并预览账号内容，不会写入 sub2api，也不会在浏览器保存 credentials。</p>
+          </div>
+          <button class="secondary" type="button" @click="clearImportPreview">清空</button>
+        </div>
+        <p v-if="importError" class="error">{{ importError }}</p>
+        <div class="form-block import-form">
+          <label>粘贴账号内容<textarea v-model="importForm.text" rows="10" placeholder="支持 JSON、JSON 数组、accounts 包装对象，以及常见 key=value / key: value 行格式。"></textarea></label>
+          <div class="filter-grid">
+            <label>选择文件<input type="file" accept=".json,.txt,.yaml,.yml,.csv" @change="handleImportFile" /></label>
+            <label>默认分组<input v-model="importForm.defaultGroup" placeholder="仅用于预览草稿" /></label>
+            <label>代理<input v-model="importForm.proxy" placeholder="仅用于预览草稿" /></label>
+            <label>优先级<input v-model="importForm.priority" type="number" placeholder="可选" /></label>
+            <label>并发<input v-model="importForm.concurrency" type="number" placeholder="可选" /></label>
+            <label>命名前缀<input v-model="importForm.namePrefix" placeholder="可选" /></label>
+          </div>
+          <div class="form-actions">
+            <button type="button" :disabled="importLoading || !activeSiteId" @click="previewImport">{{ importLoading ? '解析中...' : '生成预览' }}</button>
+            <span class="muted">当前站点：{{ activeSite?.name || '未选择' }}<template v-if="importForm.filename"> · 文件：{{ importForm.filename }}</template></span>
+          </div>
+        </div>
+        <section v-if="importPreview" class="batch-results result-panel">
+          <div class="panel-head">
+            <div>
+              <h2>预览结果</h2>
+              <p class="muted">总数 {{ importSummaryValue('total') }} · 识别 {{ importSummaryValue('recognized') }} · 需修正 {{ importSummaryValue('invalid') }} · 疑似重复 {{ importSummaryValue('duplicates') }}</p>
+            </div>
+            <button class="secondary" type="button" @click="copyText(JSON.stringify(importPreview, null, 2), '导入预览')">复制预览 JSON</button>
+          </div>
+          <div v-if="importPreview.warnings?.length" class="failure-groups">
+            <span class="muted">警告</span>
+            <span v-for="warning in importPreview.warnings" :key="warning" class="tag tag-warning">{{ warning }}</span>
+          </div>
+          <div class="result-scroll table-wrap">
+            <table class="account-table result-table">
+              <thead><tr><th>#</th><th>状态</th><th>账号</th><th>平台/类型</th><th>凭据字段</th><th>缺失字段</th><th>警告</th></tr></thead>
+              <tbody>
+                <tr v-for="item in importPreview.items" :key="String(item.index)">
+                  <td>{{ item.index }}</td>
+                  <td><span :class="importItemStatusClass(item)">{{ importItemStatus(item) }}</span></td>
+                  <td><div class="cell-stack"><strong class="account-name">{{ importItemName(item) }}</strong><span v-if="item.group" class="muted account-note">分组：{{ item.group }}</span></div></td>
+                  <td>{{ item.platform || '未知' }} / {{ item.type || '未知' }}</td>
+                  <td>{{ importItemList(item, 'credentialFields') }}</td>
+                  <td>{{ importItemList(item, 'missingFields') }}</td>
+                  <td>{{ importItemList(item, 'warnings') }}</td>
+                </tr>
+                <tr v-if="!importPreview.items.length"><td colspan="7" class="muted">未解析到账号条目。</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
       <section v-else-if="activeView === 'jobs'" class="panel content-panel">
@@ -2792,10 +2948,11 @@ h3 { margin: 0 0 10px; font-size: 15px; }
 .segmented button { padding: 7px 9px; border-radius: 9px; background: transparent; color: #94a3b8; font-size: 12px; }
 .segmented button.active { color: #fff; background: linear-gradient(135deg, #7c3aed, #2563eb); }
 label { display: grid; gap: 7px; color: #cbd5e1; font-size: 14px; }
-input, select {
+input, select, textarea {
   width: 100%; box-sizing: border-box; padding: 12px 13px; border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 12px; color: #f8fafc; background: rgba(15, 23, 42, 0.86); outline: none;
 }
+textarea { resize: vertical; min-height: 180px; font: inherit; line-height: 1.5; }
 input[type="checkbox"] { width: auto; }
 .inline-check { display: flex; grid-auto-flow: column; grid-template-columns: auto 1fr; align-items: center; }
 button {

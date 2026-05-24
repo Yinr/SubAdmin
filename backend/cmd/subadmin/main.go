@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"log/slog"
@@ -243,6 +244,14 @@ func main() {
 				return
 			}
 			writeCreateBatchTokenRefreshJob(w, r, jobService, id)
+			return
+		}
+		if action == "imports/preview" {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeImportPreview(w, r, id)
 			return
 		}
 		if action == "groups" {
@@ -1320,6 +1329,363 @@ func applyAccountMeta(result map[string]any, meta map[string]accountMeta) {
 	if value.Note != "" {
 		result["note"] = value.Note
 	}
+}
+
+type importPreviewInput struct {
+	Text     string         `json:"text"`
+	Filename string         `json:"filename"`
+	Settings map[string]any `json:"settings"`
+}
+
+type importPreviewItem struct {
+	Index            int      `json:"index"`
+	Recognized       bool     `json:"recognized"`
+	Platform         string   `json:"platform"`
+	Type             string   `json:"type"`
+	Name             string   `json:"name"`
+	Group            string   `json:"group,omitempty"`
+	CredentialFields []string `json:"credentialFields"`
+	MissingFields    []string `json:"missingFields"`
+	Warnings         []string `json:"warnings"`
+	DuplicateKey     string   `json:"duplicateKey,omitempty"`
+	RawPreview       string   `json:"rawPreview,omitempty"`
+}
+
+func writeImportPreview(w http.ResponseWriter, r *http.Request, siteID int64) {
+	input, err := decodeImportPreviewInput(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	items, warnings := parseImportPreview(input.Text)
+	markImportDuplicates(items)
+	summary := map[string]any{
+		"total":      len(items),
+		"recognized": countImportItems(items, func(item importPreviewItem) bool { return item.Recognized }),
+		"invalid":    countImportItems(items, func(item importPreviewItem) bool { return !item.Recognized }),
+		"duplicates": countImportItems(items, func(item importPreviewItem) bool { return item.DuplicateKey != "" }),
+	}
+	slog.InfoContext(r.Context(), "import preview generated", "site_id", siteID, "filename", input.Filename, "total", summary["total"], "recognized", summary["recognized"], "invalid", summary["invalid"], "duplicates", summary["duplicates"])
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":    items,
+		"warnings": warnings,
+		"errors":   []string{},
+		"summary":  summary,
+		"settings": sanitizeImportSettings(input.Settings),
+	})
+}
+
+func decodeImportPreviewInput(r *http.Request) (importPreviewInput, error) {
+	const maxBodyBytes = 2 << 20
+	contentType := strings.ToLower(r.Header.Get("Content-Type"))
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		if err := r.ParseMultipartForm(maxBodyBytes); err != nil {
+			return importPreviewInput{}, errors.New("invalid multipart form")
+		}
+		input := importPreviewInput{Text: strings.TrimSpace(r.FormValue("text")), Settings: map[string]any{}}
+		for _, key := range []string{"defaultGroup", "proxy", "priority", "concurrency", "namePrefix"} {
+			if value := strings.TrimSpace(r.FormValue(key)); value != "" {
+				input.Settings[key] = value
+			}
+		}
+		file, header, err := r.FormFile("file")
+		if err == nil {
+			defer file.Close()
+			data, err := io.ReadAll(io.LimitReader(file, maxBodyBytes+1))
+			if err != nil {
+				return importPreviewInput{}, errors.New("read upload failed")
+			}
+			if len(data) > maxBodyBytes {
+				return importPreviewInput{}, errors.New("import preview input is too large")
+			}
+			input.Filename = header.Filename
+			if input.Text != "" {
+				input.Text += "\n"
+			}
+			input.Text += string(data)
+		}
+		if strings.TrimSpace(input.Text) == "" {
+			return importPreviewInput{}, errors.New("text or file is required")
+		}
+		return input, nil
+	}
+	var input importPreviewInput
+	decoder := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes+1))
+	if err := decoder.Decode(&input); err != nil {
+		return importPreviewInput{}, errors.New("invalid json body")
+	}
+	input.Text = strings.TrimSpace(input.Text)
+	if input.Text == "" {
+		return importPreviewInput{}, errors.New("text is required")
+	}
+	if len(input.Text) > maxBodyBytes {
+		return importPreviewInput{}, errors.New("import preview input is too large")
+	}
+	return input, nil
+}
+
+func parseImportPreview(text string) ([]importPreviewItem, []string) {
+	chunks := splitImportChunks(text)
+	items := make([]importPreviewItem, 0, len(chunks))
+	warnings := []string{}
+	for index, chunk := range chunks {
+		item := buildImportPreviewItem(index+1, chunk)
+		if !item.Recognized {
+			warnings = append(warnings, fmt.Sprintf("第 %d 条未识别为账号格式", index+1))
+		}
+		items = append(items, item)
+	}
+	if len(items) == 0 {
+		warnings = append(warnings, "未解析到账号条目")
+	}
+	return items, warnings
+}
+
+func splitImportChunks(text string) []string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal([]byte(trimmed), &value); err == nil {
+		switch typed := value.(type) {
+		case []any:
+			chunks := make([]string, 0, len(typed))
+			for _, item := range typed {
+				if data, err := json.Marshal(item); err == nil {
+					chunks = append(chunks, string(data))
+				}
+			}
+			return chunks
+		case map[string]any:
+			if accounts, ok := typed["accounts"].([]any); ok {
+				chunks := make([]string, 0, len(accounts))
+				for _, item := range accounts {
+					if data, err := json.Marshal(item); err == nil {
+						chunks = append(chunks, string(data))
+					}
+				}
+				return chunks
+			}
+			return []string{trimmed}
+		}
+	}
+	parts := regexp.MustCompile(`\n\s*\n+`).Split(trimmed, -1)
+	if len(parts) > 1 {
+		return compactStrings(parts)
+	}
+	return compactStrings(strings.Split(trimmed, "\n"))
+}
+
+func buildImportPreviewItem(index int, chunk string) importPreviewItem {
+	fields := parseImportFields(chunk)
+	item := importPreviewItem{Index: index, CredentialFields: []string{}, MissingFields: []string{}, Warnings: []string{}, RawPreview: safeRawPreview(chunk)}
+	item.Platform = firstNonEmpty(fields, "platform", "provider", "vendor")
+	item.Type = firstNonEmpty(fields, "type", "account_type", "kind")
+	item.Name = firstNonEmpty(fields, "name", "email", "username", "label")
+	item.Group = firstNonEmpty(fields, "group", "group_name", "group_id")
+	if item.Platform == "" {
+		item.Platform = inferImportPlatform(fields, chunk)
+	}
+	if item.Type == "" {
+		item.Type = inferImportType(fields, chunk)
+	}
+	if item.Name == "" && fields["id"] != "" {
+		item.Name = "账号 #" + fields["id"]
+	}
+	item.CredentialFields = credentialFieldNames(fields)
+	if item.Platform == "" {
+		item.MissingFields = append(item.MissingFields, "platform")
+	}
+	if item.Type == "" {
+		item.MissingFields = append(item.MissingFields, "type")
+	}
+	if len(item.CredentialFields) == 0 {
+		item.MissingFields = append(item.MissingFields, "credentials")
+	}
+	if item.Name == "" {
+		item.Warnings = append(item.Warnings, "缺少显示名，将需要导入设置生成名称")
+	}
+	item.Recognized = len(item.MissingFields) == 0
+	if item.Name != "" {
+		item.DuplicateKey = strings.ToLower(item.Platform + ":" + item.Type + ":" + item.Name)
+	}
+	return item
+}
+
+func parseImportFields(chunk string) map[string]string {
+	fields := map[string]string{}
+	var value any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(chunk)), &value); err == nil {
+		flattenImportFields(fields, "", value)
+		return fields
+	}
+	for _, line := range strings.Split(chunk, "\n") {
+		line = strings.TrimSpace(strings.Trim(line, ","))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			key, value, ok = strings.Cut(line, ":")
+		}
+		if !ok {
+			continue
+		}
+		key = normalizeImportKey(key)
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		if key != "" && value != "" {
+			fields[key] = value
+		}
+	}
+	return fields
+}
+
+func flattenImportFields(fields map[string]string, prefix string, value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			nextKey := normalizeImportKey(key)
+			if prefix != "" {
+				nextKey = prefix + "." + nextKey
+			}
+			flattenImportFields(fields, nextKey, child)
+		}
+	case string:
+		if prefix != "" && strings.TrimSpace(typed) != "" {
+			fields[prefix] = strings.TrimSpace(typed)
+		}
+	case float64, bool:
+		if prefix != "" {
+			fields[prefix] = fmt.Sprint(typed)
+		}
+	}
+}
+
+func normalizeImportKey(key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.Trim(key, `"'`)
+	key = strings.ReplaceAll(key, "-", "_")
+	return key
+}
+
+func firstNonEmpty(fields map[string]string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(fields[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func inferImportPlatform(fields map[string]string, chunk string) string {
+	lower := strings.ToLower(chunk)
+	for _, platform := range []string{"anthropic", "openai", "gemini", "antigravity"} {
+		if strings.Contains(lower, platform) {
+			return platform
+		}
+	}
+	if fields["credentials.refresh_token"] != "" || fields["refresh_token"] != "" {
+		return "anthropic"
+	}
+	return ""
+}
+
+func inferImportType(fields map[string]string, chunk string) string {
+	lower := strings.ToLower(chunk)
+	if fields["api_key"] != "" || fields["credentials.api_key"] != "" || strings.Contains(lower, "api_key") {
+		return "apikey"
+	}
+	if fields["refresh_token"] != "" || fields["credentials.refresh_token"] != "" || strings.Contains(lower, "refresh_token") {
+		return "oauth"
+	}
+	if strings.Contains(lower, "setup") {
+		return "setup-token"
+	}
+	return ""
+}
+
+func credentialFieldNames(fields map[string]string) []string {
+	result := []string{}
+	for key, value := range fields {
+		if value == "" {
+			continue
+		}
+		base := key
+		if parts := strings.Split(key, "."); len(parts) > 1 {
+			base = parts[len(parts)-1]
+		}
+		if isSensitiveKey(base) || strings.Contains(base, "token") || strings.Contains(base, "credential") {
+			result = append(result, base)
+		}
+	}
+	slices.Sort(result)
+	return result
+}
+
+func markImportDuplicates(items []importPreviewItem) {
+	seen := map[string]int{}
+	for index := range items {
+		key := items[index].DuplicateKey
+		if key == "" {
+			continue
+		}
+		seen[key]++
+		if seen[key] > 1 {
+			items[index].Warnings = append(items[index].Warnings, "疑似重复账号")
+		}
+	}
+	for index := range items {
+		if key := items[index].DuplicateKey; key != "" && seen[key] <= 1 {
+			items[index].DuplicateKey = ""
+		}
+	}
+}
+
+func safeRawPreview(chunk string) string {
+	cleaned := sanitizeSecretText(strings.TrimSpace(chunk))
+	if len(cleaned) > 180 {
+		return cleaned[:180] + "..."
+	}
+	return cleaned
+}
+
+func sanitizeSecretText(value string) string {
+	result := regexp.MustCompile(`(?i)(access_token|refresh_token|id_token|api_key|key|secret|password|cookie|authorization|credentials)\s*[:=]\s*"?[^"\s,}]+"?`).ReplaceAllString(value, "$1:[redacted]")
+	return result
+}
+
+func sanitizeImportSettings(settings map[string]any) map[string]any {
+	result := map[string]any{}
+	for key, value := range settings {
+		cleanKey := normalizeImportKey(key)
+		if isSensitiveKey(cleanKey) {
+			continue
+		}
+		result[key] = value
+	}
+	return result
+}
+
+func countImportItems(items []importPreviewItem, match func(importPreviewItem) bool) int {
+	count := 0
+	for _, item := range items {
+		if match(item) {
+			count++
+		}
+	}
+	return count
+}
+
+func compactStrings(items []string) []string {
+	result := []string{}
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
 }
 
 func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64, logDir string) {

@@ -35,6 +35,7 @@ Implemented capabilities:
 - Jobs view lists recent jobs, reopens batch-test/token-refresh results, retries failed items, and cancels queued/running jobs.
 - Statistics dashboard uses real upstream dashboard and Ops endpoints, defaults to 24h/hourly, and supports isolated refresh for user/account concurrency panels.
 - Application logs use structured JSON Lines with configurable level, request IDs, and simple file rotation under `SUBADMIN_LOG_DIR`.
+- Import page supports pasted text or small files, parses known account-shaped content server-side, and returns a sanitized preview without upstream writes.
 - Protected OpenAPI, Swagger UI, and AI reference docs are available inside the logged-in UI.
 
 ## Completed Areas
@@ -58,13 +59,13 @@ Keep completed implementation details out of this plan unless they affect future
 - Per-item job outcomes are stored in `result_json`; there is no `job_items` table yet.
 - Filtered account ID collection is still frontend-driven because upstream and local filter semantics are not fully reproducible server-side.
 - Token refresh cancellation is best-effort: SubAdmin can cancel local tracking/request state, but it cannot roll back upstream refresh work already performed by sub2api.
-- High-risk account writes and import execution remain disabled until preview, confirmation, job tracking, and audit logging are implemented.
+- High-risk account writes and import execution remain disabled until confirmation, job tracking, and audit logging are implemented.
 
-## Next Priority: Import Preview
+## Current Import Preview Scope
 
-Goal: let operators upload or paste account definitions, parse them server-side, and review a safe preview without writing to upstream sub2api.
+Import preview is implemented as a safe parsing and validation step only. It does not create accounts, refresh tokens, or call upstream write APIs.
 
-First implementation scope:
+Current scope:
 
 - Accept pasted text and small uploaded files in known sub2api account formats.
 - Parse input server-side only.
@@ -73,18 +74,6 @@ First implementation scope:
 - Store no upstream credentials in browser storage.
 - Do not call upstream write APIs.
 - Do not create accounts.
-
-Suggested API shape:
-
-- `POST /api/sites/{siteId}/imports/preview`: parse upload/paste input and return a preview payload.
-- `GET /api/import-templates`: list saved templates after template support exists.
-- `POST /api/import-templates`: save reusable import defaults after preview is stable.
-
-Suggested UI shape:
-
-- Add an Import page or an Accounts-page Import panel.
-- Show parse summary, validation warnings, duplicate risks, and recognized account rows.
-- Keep a clear disabled/absent execution action until audit logging and confirmation are ready.
 
 ## Planned After Import Preview
 
@@ -126,4 +115,4 @@ Suggested UI shape:
 
 ## Immediate Next Step
 
-Implement import preview with no upstream writes, then add audit-log recording before any import execution or other high-risk account mutations.
+Add import templates and audit-log recording before any import execution or other high-risk account mutations.
