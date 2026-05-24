@@ -35,7 +35,7 @@ Implemented capabilities:
 - Jobs view lists recent jobs, reopens batch-test/token-refresh results, retries failed items, and cancels queued/running jobs.
 - Statistics dashboard uses real upstream dashboard and Ops endpoints, defaults to 24h/hourly, and supports isolated refresh for user/account concurrency panels.
 - Application logs use structured JSON Lines with configurable level, request IDs, and simple file rotation under `SUBADMIN_LOG_DIR`.
-- Import page supports pasted text or small files, parses known account-shaped content server-side, and returns a sanitized preview without upstream writes. Preview rows explicitly show applied draft settings such as name prefix, selected groups, proxy, models, priority, and concurrency.
+- Import page supports pasted text or small files, parses known account-shaped content server-side, and returns a sanitized preview without upstream writes. Preview rows are paged by default and explicitly show applied draft settings such as name prefix, selected groups, proxy, models, priority, and concurrency.
 - Import templates can save and apply non-sensitive preview defaults.
 - Audit logs record site writes, job actions, and import preview summaries; the Audit page lists recent audit records.
 - Protected OpenAPI, Swagger UI, and AI reference docs are available inside the logged-in UI.

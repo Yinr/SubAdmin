@@ -86,6 +86,23 @@ const activeView = ref<ViewMode>('stats')
 const statsError = ref('')
 const auditError = ref('')
 const importTemplateName = ref('')
+const importTemplateDeleteMode = ref(false)
+const newImportGroupTag = ref('')
+const newImportModelTag = ref('')
+const customImportGroups = ref<string[]>([])
+const customImportModels = ref<string[]>([])
+const importPreviewPage = ref(1)
+const importPreviewPageSize = 10
+const confirmDialog = reactive({
+  open: false,
+  title: '',
+  message: '',
+  detail: '',
+  confirmText: '确认',
+  cancelText: '取消',
+  closeOnBackdrop: true,
+  resolve: null as null | ((value: boolean) => void),
+})
 const batchTestTotal = ref(0)
 const batchTestDone = ref(0)
 const batchRefreshTotal = ref(0)
@@ -140,14 +157,12 @@ const batchTestForm = reactive({
 const importForm = reactive({
   text: '',
   filename: '',
-  defaultGroup: '',
   groups: [] as string[],
   proxy: '',
   priority: '',
   concurrency: '',
   namePrefix: '',
   models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'] as string[],
-  customModels: '',
 })
 
 const scheduleQuickFilter = ref('all')
@@ -249,12 +264,24 @@ const proxyOptions = computed(() => proxies.value.map((proxy) => ({ id: String(p
 
 const importModelOptions = computed(() => {
   const values = new Set(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'])
-  importForm.customModels.split(/[,\s]+/).forEach((model) => {
-    const value = model.trim()
-    if (value) values.add(value)
-  })
+  customImportModels.value.forEach((model) => values.add(model))
   return Array.from(values)
 })
+
+const importGroupOptions = computed(() => {
+  const values = new Map<string, string>()
+  groupOptions.value.forEach((group) => values.set(group.id, group.name))
+  customImportGroups.value.forEach((group) => values.set(group, group))
+  return Array.from(values.entries()).map(([id, name]) => ({ id, name, custom: customImportGroups.value.includes(id) }))
+})
+
+const pagedImportPreviewItems = computed(() => {
+  const items = importPreview.value?.items || []
+  const start = (importPreviewPage.value - 1) * importPreviewPageSize
+  return items.slice(start, start + importPreviewPageSize)
+})
+
+const importPreviewTotalPages = computed(() => Math.max(1, Math.ceil((importPreview.value?.items.length || 0) / importPreviewPageSize)))
 
 const selectedAccountCount = computed(() => selectedAccountIds.value.size)
 
@@ -624,7 +651,8 @@ async function patchSite(site: Site, payload: Record<string, unknown>) {
 }
 
 async function deleteSite(site: Site) {
-  if (!confirm(`确定删除站点「${site.name}」吗？`)) return
+  const ok = await askConfirm({ title: '删除站点？', message: `确定删除站点「${site.name}」吗？`, confirmText: '删除', closeOnBackdrop: false })
+  if (!ok) return
   await api(`api/sites/${site.id}`, { method: 'DELETE' })
   if (activeSiteId.value === site.id) activeSiteId.value = null
   await loadSites()
@@ -1029,11 +1057,46 @@ async function loadImportTemplates() {
   }
 }
 
+function askConfirm(options: { title: string; message: string; detail?: string; confirmText?: string; cancelText?: string; closeOnBackdrop?: boolean }) {
+  confirmDialog.open = true
+  confirmDialog.title = options.title
+  confirmDialog.message = options.message
+  confirmDialog.detail = options.detail || ''
+  confirmDialog.confirmText = options.confirmText || '确认'
+  confirmDialog.cancelText = options.cancelText || '取消'
+  confirmDialog.closeOnBackdrop = options.closeOnBackdrop !== false
+  return new Promise<boolean>((resolve) => {
+    confirmDialog.resolve = resolve
+  })
+}
+
+function resolveConfirm(value: boolean) {
+  confirmDialog.open = false
+  confirmDialog.resolve?.(value)
+  confirmDialog.resolve = null
+}
+
+function closeConfirmFromBackdrop() {
+  if (confirmDialog.closeOnBackdrop) resolveConfirm(false)
+}
+
 async function saveImportTemplate() {
   const name = importTemplateName.value.trim()
   if (!name) {
     importError.value = '请填写模板名称'
     return
+  }
+  const existing = importTemplates.value.find((template) => String(template.name || '') === name)
+  if (existing) {
+    const ok = await askConfirm({
+      title: '覆盖导入模板？',
+      message: `已存在同名模板「${name}」，将删除旧模板并保存当前设置。`,
+      detail: importTemplateDiff(existing),
+      confirmText: '覆盖保存',
+      closeOnBackdrop: false,
+    })
+    if (!ok) return
+    await api(`api/import-templates/${existing.id}`, { method: 'DELETE' })
   }
   try {
     await api('api/import-templates', {
@@ -1049,7 +1112,9 @@ async function saveImportTemplate() {
 
 async function deleteImportTemplate(template: Record<string, unknown>) {
   const id = Number(template.id)
-  if (!id || !window.confirm(`确定删除模板「${template.name || id}」吗？`)) return
+  if (!id) return
+  const ok = await askConfirm({ title: '删除导入模板？', message: `确定删除模板「${template.name || id}」吗？`, confirmText: '删除', closeOnBackdrop: false })
+  if (!ok) return
   try {
     await api(`api/import-templates/${id}`, { method: 'DELETE' })
     await loadImportTemplates()
@@ -1060,11 +1125,59 @@ async function deleteImportTemplate(template: Record<string, unknown>) {
 
 function applyImportTemplate(template: Record<string, unknown>) {
   const data = (template.template || {}) as Record<string, unknown>
-  ;(['defaultGroup', 'proxy', 'priority', 'concurrency', 'namePrefix', 'customModels'] as const).forEach((key) => {
+  importTemplateName.value = String(template.name || '')
+  ;(['proxy', 'priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
     importForm[key] = String(data[key] || '')
   })
   importForm.groups = Array.isArray(data.groups) ? data.groups.map(String) : []
   importForm.models = Array.isArray(data.models) ? data.models.map(String) : importForm.models
+  customImportGroups.value = importForm.groups.filter((group) => !groupOptions.value.some((option) => option.id === group))
+  customImportModels.value = importForm.models.filter((model) => !['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'].includes(model))
+}
+
+function importTemplateDiff(template: Record<string, unknown>) {
+  const before = JSON.stringify(template.template || {}, null, 2)
+  const after = JSON.stringify(importPreviewSettings(), null, 2)
+  return `旧设置:\n${before}\n\n新设置:\n${after}`
+}
+
+function toggleImportGroup(group: string) {
+  const index = importForm.groups.indexOf(group)
+  if (index >= 0) importForm.groups.splice(index, 1)
+  else importForm.groups.push(group)
+}
+
+function addImportGroupTag() {
+  const value = newImportGroupTag.value.trim()
+  if (!value) return
+  if (!customImportGroups.value.includes(value) && !groupOptions.value.some((group) => group.id === value)) customImportGroups.value.push(value)
+  if (!importForm.groups.includes(value)) importForm.groups.push(value)
+  newImportGroupTag.value = ''
+}
+
+function removeImportGroupTag(group: string) {
+  customImportGroups.value = customImportGroups.value.filter((item) => item !== group)
+  importForm.groups = importForm.groups.filter((item) => item !== group)
+}
+
+function toggleImportModel(model: string) {
+  const index = importForm.models.indexOf(model)
+  if (index >= 0) importForm.models.splice(index, 1)
+  else importForm.models.push(model)
+}
+
+function addImportModelTag() {
+  const values = newImportModelTag.value.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean)
+  values.forEach((value) => {
+    if (!customImportModels.value.includes(value) && !['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'].includes(value)) customImportModels.value.push(value)
+    if (!importForm.models.includes(value)) importForm.models.push(value)
+  })
+  newImportModelTag.value = ''
+}
+
+function removeImportModelTag(model: string) {
+  customImportModels.value = customImportModels.value.filter((item) => item !== model)
+  importForm.models = importForm.models.filter((item) => item !== model)
 }
 
 async function previewImport() {
@@ -1088,6 +1201,7 @@ async function previewImport() {
         settings: importPreviewSettings(),
       }),
     })
+    importPreviewPage.value = 1
   } catch (error) {
     importError.value = error instanceof Error ? error.message : '生成导入预览失败'
   } finally {
@@ -1097,7 +1211,7 @@ async function previewImport() {
 
 function importPreviewSettings() {
   const settings: Record<string, unknown> = {}
-  ;(['defaultGroup', 'proxy', 'priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
+  ;(['proxy', 'priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
     const value = String(importForm[key] || '').trim()
     if (value) settings[key] = value
   })
@@ -1123,7 +1237,12 @@ async function handleImportFile(event: Event) {
 function clearImportPreview() {
   importPreview.value = null
   importError.value = ''
-  Object.assign(importForm, { text: '', filename: '', defaultGroup: '', groups: [], proxy: '', priority: '', concurrency: '', namePrefix: '', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'], customModels: '' })
+  Object.assign(importForm, { text: '', filename: '', groups: [], proxy: '', priority: '', concurrency: '', namePrefix: '', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'] })
+  customImportGroups.value = []
+  customImportModels.value = []
+  importTemplateName.value = ''
+  importTemplateDeleteMode.value = false
+  importPreviewPage.value = 1
 }
 
 function stopAccountQueryTimer() {
@@ -1644,7 +1763,7 @@ async function refreshAccountTokenIDs(ids: number[]) {
     batchRefreshError.value = '请先选择账号'
     return
   }
-  const ok = window.confirm(`将刷新 ${ids.length} 个账号的 OAuth 令牌，这会修改上游账号凭证。确认继续？`)
+  const ok = await askConfirm({ title: '刷新账号令牌？', message: `将刷新 ${ids.length} 个账号的 OAuth 令牌，这会修改上游账号凭证。确认继续？`, confirmText: '确认刷新', closeOnBackdrop: false })
   if (!ok) return
   batchRefreshTotal.value = ids.length
   batchRefreshDone.value = 0
@@ -1765,7 +1884,8 @@ async function cancelBatchTestJob() {
 async function cancelJobFromList(job: JobRecord) {
   const id = Number(job.id)
   if (!id || !isJobCancellable(job)) return
-  if (!window.confirm(`确定取消任务 #${id} 吗？`)) return
+  const ok = await askConfirm({ title: '取消任务？', message: `确定取消任务 #${id} 吗？`, confirmText: '取消任务', closeOnBackdrop: false })
+  if (!ok) return
   batchTestError.value = ''
   try {
     const cancelled = await api<JobRecord>(`api/jobs/${id}/cancel`, { method: 'POST', body: '{}' })
@@ -2253,7 +2373,6 @@ onUnmounted(() => {
           <label>粘贴账号内容<textarea v-model="importForm.text" rows="10" placeholder="支持 JSON、JSON 数组、accounts 包装对象，以及常见 key=value / key: value 行格式。"></textarea></label>
           <div class="filter-grid">
             <label>选择文件<input type="file" accept=".json,.txt,.yaml,.yml,.csv" @change="handleImportFile" /></label>
-            <label>默认分组<input v-model="importForm.defaultGroup" placeholder="可选；也可使用下方多选分组" /></label>
             <label>代理
               <select v-model="importForm.proxy" :disabled="proxiesLoading">
                 <option value="">不指定代理</option>
@@ -2263,19 +2382,26 @@ onUnmounted(() => {
             <label>优先级<input v-model="importForm.priority" type="number" placeholder="可选" /></label>
             <label>并发<input v-model="importForm.concurrency" type="number" placeholder="可选" /></label>
             <label>命名前缀<input v-model="importForm.namePrefix" placeholder="可选" /></label>
-            <label>自定义模型<input v-model="importForm.customModels" placeholder="用逗号或空格分隔更多模型" /></label>
           </div>
-          <div class="section-card compact-section">
-            <h3>分组多选</h3>
-            <div class="chip-row wrap">
-              <label v-for="group in groupOptions" :key="group.id" class="inline-check chip-check"><input v-model="importForm.groups" type="checkbox" :value="group.id" /> {{ group.name }}</label>
-              <span v-if="!groupOptions.length" class="muted">暂无可选分组。</span>
+          <div class="section-card compact-section import-setting-card">
+            <h3>分组</h3>
+            <div class="active-filter-chips tag-picker">
+              <button v-for="group in importGroupOptions" :key="group.id" type="button" class="filter-chip" :class="{ active: importForm.groups.includes(group.id) }" @click="toggleImportGroup(group.id)">{{ group.name }}<span v-if="group.custom" @click.stop="removeImportGroupTag(group.id)">×</span></button>
+              <span v-if="!importGroupOptions.length" class="muted">暂无可选分组。</span>
+            </div>
+            <div class="group-add-row">
+              <input v-model="newImportGroupTag" placeholder="输入新分组 tag" @keyup.enter="addImportGroupTag" />
+              <button type="button" class="secondary" @click="addImportGroupTag">添加分组</button>
             </div>
           </div>
-          <div class="section-card compact-section">
-            <h3>可用模型</h3>
-            <div class="chip-row wrap">
-              <label v-for="model in importModelOptions" :key="model" class="inline-check chip-check"><input v-model="importForm.models" type="checkbox" :value="model" /> {{ model }}</label>
+          <div class="section-card compact-section import-setting-card">
+            <h3>模型</h3>
+            <div class="active-filter-chips tag-picker">
+              <button v-for="model in importModelOptions" :key="model" type="button" class="filter-chip" :class="{ active: importForm.models.includes(model) }" @click="toggleImportModel(model)">{{ model }}<span v-if="customImportModels.includes(model)" @click.stop="removeImportModelTag(model)">×</span></button>
+            </div>
+            <div class="group-add-row">
+              <input v-model="newImportModelTag" placeholder="输入新模型，多个可用逗号或空格分隔" @keyup.enter="addImportModelTag" />
+              <button type="button" class="secondary" @click="addImportModelTag">添加模型</button>
             </div>
           </div>
           <div class="form-actions">
@@ -2289,15 +2415,14 @@ onUnmounted(() => {
               <h2>导入模板</h2>
               <p class="muted">保存和套用预览默认设置；模板不会保存账号凭据。</p>
             </div>
-            <button class="secondary" :disabled="importTemplatesLoading" @click="loadImportTemplates">{{ importTemplatesLoading ? '加载中...' : '刷新模板' }}</button>
+            <div class="actions"><button class="secondary" :disabled="importTemplatesLoading" @click="loadImportTemplates">{{ importTemplatesLoading ? '加载中...' : '刷新模板' }}</button><button class="secondary" :class="{ danger: importTemplateDeleteMode }" @click="importTemplateDeleteMode = !importTemplateDeleteMode">{{ importTemplateDeleteMode ? '退出删除' : '删除模板' }}</button></div>
           </div>
           <div class="filter-grid">
             <label>模板名称<input v-model="importTemplateName" placeholder="例如 Anthropic OAuth 默认设置" /></label>
             <button type="button" :disabled="!importTemplateName.trim()" @click="saveImportTemplate">保存当前设置为模板</button>
           </div>
           <div class="active-filter-chips">
-            <button v-for="template in importTemplates" :key="String(template.id)" type="button" class="filter-chip" @click="applyImportTemplate(template)">{{ template.name }}</button>
-            <button v-for="template in importTemplates" :key="`delete-${template.id}`" type="button" class="filter-chip danger" @click="deleteImportTemplate(template)">删除 {{ template.name }}</button>
+            <button v-for="template in importTemplates" :key="String(template.id)" type="button" class="filter-chip" :class="{ danger: importTemplateDeleteMode }" @click="importTemplateDeleteMode ? deleteImportTemplate(template) : applyImportTemplate(template)">{{ importTemplateDeleteMode ? '删除 ' : '' }}{{ template.name }}</button>
             <span v-if="!importTemplates.length" class="muted">暂无模板。</span>
           </div>
         </section>
@@ -2317,7 +2442,7 @@ onUnmounted(() => {
             <table class="account-table result-table">
               <thead><tr><th>#</th><th>状态</th><th>账号</th><th>平台/类型</th><th>应用设置</th><th>凭据字段</th><th>缺失字段</th><th>警告</th></tr></thead>
               <tbody>
-                <tr v-for="item in importPreview.items" :key="String(item.index)">
+              <tr v-for="item in pagedImportPreviewItems" :key="String(item.index)">
                   <td>{{ item.index }}</td>
                   <td><span :class="importItemStatusClass(item)">{{ importItemStatus(item) }}</span></td>
                   <td><div class="cell-stack"><strong class="account-name">{{ importItemName(item) }}</strong><span v-if="item.group" class="muted account-note">分组：{{ item.group }}</span></div></td>
@@ -2330,6 +2455,11 @@ onUnmounted(() => {
                 <tr v-if="!importPreview.items.length"><td colspan="8" class="muted">未解析到账号条目。</td></tr>
               </tbody>
             </table>
+          </div>
+          <div class="pager" v-if="importPreview.items.length > importPreviewPageSize">
+            <button class="secondary" :disabled="importPreviewPage <= 1" @click="importPreviewPage -= 1">上一页</button>
+            <span class="muted">第 {{ importPreviewPage }} / {{ importPreviewTotalPages }} 页，默认每页 {{ importPreviewPageSize }} 条</span>
+            <button class="secondary" :disabled="importPreviewPage >= importPreviewTotalPages" @click="importPreviewPage += 1">下一页</button>
           </div>
         </section>
       </section>
@@ -3003,6 +3133,18 @@ onUnmounted(() => {
         </div>
       </section>
     </div>
+
+    <div v-if="confirmDialog.open" class="modal-mask" @click.self="closeConfirmFromBackdrop">
+      <section class="modal-card confirm-card">
+        <h2>{{ confirmDialog.title }}</h2>
+        <p>{{ confirmDialog.message }}</p>
+        <pre v-if="confirmDialog.detail" class="detail-json">{{ confirmDialog.detail }}</pre>
+        <div class="modal-actions">
+          <button type="button" class="secondary" @click="resolveConfirm(false)">{{ confirmDialog.cancelText }}</button>
+          <button type="button" :class="confirmDialog.confirmText.includes('删除') ? 'danger' : ''" @click="resolveConfirm(true)">{{ confirmDialog.confirmText }}</button>
+        </div>
+      </section>
+    </div>
   </main>
 </template>
 
@@ -3163,6 +3305,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .filter-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .active-filter-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 12px; }
 .filter-chip { padding: 6px 10px; border-radius: 999px; background: rgba(59, 130, 246, 0.14); color: #dbeafe; font-size: 12px; }
+.filter-chip.active { background: linear-gradient(135deg, rgba(124, 58, 237, 0.9), rgba(37, 99, 235, 0.86)); color: #fff; }
+.tag-picker .filter-chip { border: 1px solid rgba(147, 197, 253, 0.16); }
+.import-setting-card { background: linear-gradient(135deg, rgba(30, 41, 59, 0.68), rgba(2, 6, 23, 0.28)); }
+.confirm-card { width: min(560px, calc(100vw - 32px)); }
 .filter-chip span { margin-left: 6px; color: #93c5fd; }
 .query-notice { margin: 6px 0 12px; }
 .batch-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 14px; background: rgba(2, 6, 23, 0.22); }
