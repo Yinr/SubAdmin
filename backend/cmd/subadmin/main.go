@@ -2,23 +2,28 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"subadmin/internal/applog"
 	"subadmin/internal/auth"
 	"subadmin/internal/config"
 	"subadmin/internal/db"
@@ -28,29 +33,42 @@ import (
 
 func main() {
 	cfg := config.Load()
+	logger, err := applog.Open(cfg.LogDir, cfg.LogLevel, cfg.LogMaxBytes, cfg.LogBackups)
+	if err != nil {
+		log.Fatalf("open app logger: %v", err)
+	}
+	defer logger.Close()
+	slog.Info("subadmin starting", "addr", cfg.Addr, "db_path", cfg.DBPath, "log_dir", cfg.LogDir, "log_level", cfg.LogLevel, "log_max_bytes", cfg.LogMaxBytes, "log_backups", cfg.LogBackups)
 	dbPath := cfg.DBPath
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		log.Fatalf("create db dir: %v", err)
+		slog.Error("create db dir failed", "error", err, "path", filepath.Dir(dbPath))
+		os.Exit(1)
 	}
 
 	store, err := db.Open(dbPath)
 	if err != nil {
-		log.Fatalf("open db: %v", err)
+		slog.Error("open db failed", "error", err, "path", dbPath)
+		os.Exit(1)
 	}
 	defer store.Close()
+	slog.Info("database opened", "path", dbPath)
 	authManager := auth.NewManager(store.DB(), cfg)
 	var siteService *sites.Service
 	var jobService *jobManager
 	if cfg.SecretKey != "" {
 		box, err := secretbox.New(cfg.SecretKey)
 		if err != nil {
-			log.Fatalf("init secret box: %v", err)
+			slog.Error("init secret box failed", "error", err)
+			os.Exit(1)
 		}
 		siteService = sites.NewService(store.DB(), box)
 		jobService = newJobManager(store.DB(), siteService, cfg.LogDir)
 		if err := jobService.markInterrupted(context.Background()); err != nil {
-			log.Printf("mark interrupted jobs: %v", err)
+			slog.Warn("mark interrupted jobs failed", "error", err)
 		}
+		slog.Info("site and job services initialized")
+	} else {
+		slog.Warn("site management disabled because SUBADMIN_SECRET_KEY is not set")
 	}
 
 	mux := http.NewServeMux()
@@ -73,12 +91,15 @@ func main() {
 		}
 		if err := authManager.Login(w, r, input.Secret); err != nil {
 			if err == auth.ErrUnauthorized {
+				slog.WarnContext(r.Context(), "login failed", "reason", "invalid secret", "remote_addr", r.RemoteAddr)
 				writeError(w, http.StatusUnauthorized, "invalid login secret")
 				return
 			}
+			slog.ErrorContext(r.Context(), "login failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "login failed")
 			return
 		}
+		slog.InfoContext(r.Context(), "login succeeded", "remote_addr", r.RemoteAddr)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("/api/auth/logout", func(w http.ResponseWriter, r *http.Request) {
@@ -87,9 +108,11 @@ func main() {
 			return
 		}
 		if err := authManager.Logout(w, r); err != nil {
+			slog.ErrorContext(r.Context(), "logout failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "logout failed")
 			return
 		}
+		slog.InfoContext(r.Context(), "logout succeeded", "remote_addr", r.RemoteAddr)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("/api/auth/me", func(w http.ResponseWriter, r *http.Request) {
@@ -130,6 +153,7 @@ func main() {
 				writeError(w, http.StatusInternalServerError, "list sites failed")
 				return
 			}
+			slog.DebugContext(r.Context(), "sites listed", "count", len(items))
 			writeJSON(w, http.StatusOK, map[string]any{"items": items})
 		case http.MethodPost:
 			var input sites.CreateInput
@@ -142,6 +166,7 @@ func main() {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+			slog.InfoContext(r.Context(), "site created", "site_id", item.ID, "site_name", item.Name)
 			writeJSON(w, http.StatusCreated, item)
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -170,6 +195,7 @@ func main() {
 				writeSiteError(w, err)
 				return
 			}
+			slog.InfoContext(r.Context(), "site connection tested", "site_id", id, "ok", result["ok"], "status_code", result["statusCode"])
 			writeJSON(w, http.StatusOK, result)
 			return
 		}
@@ -188,6 +214,7 @@ func main() {
 				writeSiteError(w, err)
 				return
 			}
+			slog.InfoContext(r.Context(), "accounts proxied", "site_id", id, "status_code", statusCode, "response_bytes", len(data), "query_keys", sortedQueryKeys(query))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(statusCode)
 			data = sanitizeJSONForBrowser(data)
@@ -228,6 +255,7 @@ func main() {
 				writeSiteError(w, err)
 				return
 			}
+			slog.DebugContext(r.Context(), "groups proxied", "site_id", id, "status_code", statusCode, "response_bytes", len(data))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(statusCode)
 			_, _ = w.Write(sanitizeJSONForBrowser(data))
@@ -268,6 +296,7 @@ func main() {
 				writeSiteError(w, err)
 				return
 			}
+			slog.DebugContext(r.Context(), "site loaded", "site_id", item.ID, "site_name", item.Name)
 			writeJSON(w, http.StatusOK, item)
 		case http.MethodPatch:
 			var input sites.UpdateInput
@@ -280,12 +309,14 @@ func main() {
 				writeSiteError(w, err)
 				return
 			}
+			slog.InfoContext(r.Context(), "site updated", "site_id", item.ID, "site_name", item.Name)
 			writeJSON(w, http.StatusOK, item)
 		case http.MethodDelete:
 			if err := siteService.Delete(r.Context(), id); err != nil {
 				writeSiteError(w, err)
 				return
 			}
+			slog.WarnContext(r.Context(), "site deleted", "site_id", id)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -293,9 +324,10 @@ func main() {
 	})
 
 	addr := cfg.Addr
-	log.Printf("subAdmin listening on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Fatalf("serve: %v", err)
+	slog.Info("subadmin listening", "addr", addr)
+	if err := http.ListenAndServe(addr, loggingMiddleware(mux)); err != nil {
+		slog.Error("serve failed", "error", err)
+		os.Exit(1)
 	}
 }
 
@@ -351,8 +383,136 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (w *loggingResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *loggingResponseWriter) Write(data []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(data)
+	w.bytes += n
+	return n, err
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		requestID := r.Header.Get("X-Request-ID")
+		if requestID == "" {
+			requestID = newRequestID()
+		}
+		w.Header().Set("X-Request-ID", requestID)
+		r = r.WithContext(applog.WithRequestID(r.Context(), requestID))
+		wrapped := &loggingResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(wrapped, r)
+		status := wrapped.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		level := slog.LevelInfo
+		if status >= 500 {
+			level = slog.LevelError
+		} else if status >= 400 {
+			level = slog.LevelWarn
+		} else if isLowSignalRequest(r) {
+			level = slog.LevelDebug
+		}
+		slog.LogAttrs(r.Context(), level, "http request",
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.String("route_group", routeGroup(r.URL.Path)),
+			slog.Int("status", status),
+			slog.Int("bytes", wrapped.bytes),
+			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
+			slog.String("remote_addr", r.RemoteAddr),
+			slog.String("user_agent_family", userAgentFamily(r.UserAgent())),
+		)
+	})
+}
+
+func newRequestID() string {
+	var data [8]byte
+	if _, err := rand.Read(data[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(data[:])
+}
+
+func isLowSignalRequest(r *http.Request) bool {
+	path := r.URL.Path
+	return path == "/healthz" || strings.HasPrefix(path, "/assets/") || path == "/favicon.ico"
+}
+
+func routeGroup(path string) string {
+	switch {
+	case path == "/healthz":
+		return "health"
+	case strings.HasPrefix(path, "/api/auth"):
+		return "auth"
+	case strings.HasPrefix(path, "/api/sites"):
+		return "sites"
+	case strings.HasPrefix(path, "/api/jobs"):
+		return "jobs"
+	case strings.HasPrefix(path, "/docs"):
+		return "docs"
+	case strings.HasPrefix(path, "/assets"):
+		return "assets"
+	default:
+		return "frontend"
+	}
+}
+
+func userAgentFamily(value string) string {
+	lower := strings.ToLower(value)
+	switch {
+	case strings.Contains(lower, "edg/"):
+		return "edge"
+	case strings.Contains(lower, "chrome/"):
+		return "chrome"
+	case strings.Contains(lower, "firefox/"):
+		return "firefox"
+	case strings.Contains(lower, "safari/"):
+		return "safari"
+	case strings.Contains(lower, "curl/"):
+		return "curl"
+	case value == "":
+		return "unknown"
+	default:
+		return "other"
+	}
+}
+
 func writeError(w http.ResponseWriter, status int, message string) {
+	slog.LogAttrs(context.Background(), logLevelForStatus(status), "api error", slog.Int("status", status), slog.String("message", message))
 	writeJSON(w, status, map[string]any{"error": message})
+}
+
+func logLevelForStatus(status int) slog.Level {
+	if status >= 500 {
+		return slog.LevelError
+	}
+	if status >= 400 {
+		return slog.LevelWarn
+	}
+	return slog.LevelInfo
+}
+
+func sortedQueryKeys(query url.Values) []string {
+	keys := make([]string, 0, len(query))
+	for key := range query {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 func sanitizeJSONForBrowser(data []byte) []byte {
@@ -491,6 +651,7 @@ func jobsHandler(authManager *auth.Manager, manager *jobManager) http.HandlerFun
 			writeError(w, http.StatusInternalServerError, "list jobs failed")
 			return
 		}
+		slog.DebugContext(r.Context(), "jobs listed", "count", len(items))
 		writeJSON(w, http.StatusOK, map[string]any{"items": items})
 	}
 }
@@ -520,6 +681,7 @@ func jobDetailHandler(authManager *auth.Manager, manager *jobManager) http.Handl
 				writeJobError(w, err)
 				return
 			}
+			slog.DebugContext(r.Context(), "job loaded", "job_id", job.ID, "type", job.Type, "status", job.Status, "done_count", job.DoneCount, "total_count", job.TotalCount)
 			writeJSON(w, http.StatusOK, job)
 		case "cancel":
 			if r.Method != http.MethodPost {
@@ -531,6 +693,7 @@ func jobDetailHandler(authManager *auth.Manager, manager *jobManager) http.Handl
 				writeJobError(w, err)
 				return
 			}
+			slog.WarnContext(r.Context(), "job cancel requested", "job_id", id, "status", job.Status, "type", job.Type)
 			writeJSON(w, http.StatusOK, job)
 		case "retry-failed":
 			if r.Method != http.MethodPost {
@@ -542,6 +705,7 @@ func jobDetailHandler(authManager *auth.Manager, manager *jobManager) http.Handl
 				writeJobError(w, err)
 				return
 			}
+			slog.InfoContext(r.Context(), "job retry created", "source_job_id", id, "new_job_id", job.ID, "type", job.Type, "total_count", job.TotalCount)
 			writeJSON(w, http.StatusCreated, job)
 		default:
 			writeError(w, http.StatusNotFound, "job action not found")
@@ -589,6 +753,7 @@ func writeCreateBatchAccountTestJob(w http.ResponseWriter, r *http.Request, mana
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	slog.InfoContext(r.Context(), "job created", "job_id", job.ID, "type", job.Type, "site_id", siteID, "total_count", job.TotalCount)
 	writeJSON(w, http.StatusCreated, job)
 }
 
@@ -607,6 +772,7 @@ func writeCreateBatchTokenRefreshJob(w http.ResponseWriter, r *http.Request, man
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	slog.InfoContext(r.Context(), "job created", "job_id", job.ID, "type", job.Type, "site_id", siteID, "total_count", job.TotalCount)
 	writeJSON(w, http.StatusCreated, job)
 }
 
@@ -706,18 +872,22 @@ func (m *jobManager) startBatchTokenRefresh(jobID, siteID int64, input batchToke
 func (m *jobManager) runBatchAccountTest(ctx context.Context, jobID, siteID int64, input batchAccountTestInput) {
 	now := time.Now().Unix()
 	_, _ = m.db.ExecContext(context.Background(), `UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?`, now, jobID)
+	slog.Info("job started", "job_id", jobID, "type", "batch_account_test", "site_id", siteID, "total_count", len(input.IDs))
 	items := make([]map[string]any, 0, len(input.IDs))
 	successCount := 0
 	failedCount := 0
 	for index, accountID := range input.IDs {
 		if ctx.Err() != nil {
 			_ = m.finishJob(jobID, "cancelled", items, successCount, failedCount, ctx.Err().Error())
+			slog.Warn("job cancelled", "job_id", jobID, "type", "batch_account_test", "done_count", len(items), "error", ctx.Err())
 			return
 		}
 		if index > 0 && !waitForJobDelay(ctx, len(input.IDs), input.DelayMs, input.JitterMs) {
 			_ = m.finishJob(jobID, "cancelled", items, successCount, failedCount, context.Canceled.Error())
+			slog.Warn("job cancelled during delay", "job_id", jobID, "type", "batch_account_test", "done_count", len(items))
 			return
 		}
+		slog.Debug("job item started", "job_id", jobID, "type", "batch_account_test", "site_id", siteID, "account_id", accountID, "index", index+1, "total_count", len(input.IDs))
 		result := runAccountTest(ctx, m.siteService, m.logDir, siteID, accountID, input)
 		applyAccountMeta(result, input.AccountMeta)
 		if ctx.Err() != nil {
@@ -725,6 +895,7 @@ func (m *jobManager) runBatchAccountTest(ctx context.Context, jobID, siteID int6
 			failedCount++
 			_ = m.updateJobProgress(jobID, items, successCount, failedCount)
 			_ = m.finishJob(jobID, "cancelled", items, successCount, failedCount, ctx.Err().Error())
+			slog.Warn("job cancelled", "job_id", jobID, "type", "batch_account_test", "done_count", len(items), "error", ctx.Err())
 			return
 		}
 		if result["ok"] == true {
@@ -734,30 +905,41 @@ func (m *jobManager) runBatchAccountTest(ctx context.Context, jobID, siteID int6
 		}
 		items = append(items, result)
 		_ = m.updateJobProgress(jobID, items, successCount, failedCount)
+		slog.Debug("job item finished", "job_id", jobID, "type", "batch_account_test", "site_id", siteID, "account_id", accountID, "ok", result["ok"], "status_code", result["statusCode"], "done_count", len(items))
 	}
 	status := "succeeded"
 	if failedCount > 0 {
 		status = "failed"
 	}
 	_ = m.finishJob(jobID, status, items, successCount, failedCount, "")
+	slog.Info("job finished", "job_id", jobID, "type", "batch_account_test", "status", status, "success_count", successCount, "failed_count", failedCount)
 }
 
 func (m *jobManager) runBatchTokenRefresh(ctx context.Context, jobID, siteID int64, input batchTokenRefreshInput) {
 	now := time.Now().Unix()
 	_, _ = m.db.ExecContext(context.Background(), `UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?`, now, jobID)
+	slog.Info("job started", "job_id", jobID, "type", "batch_token_refresh", "site_id", siteID, "total_count", len(input.IDs))
 	if ctx.Err() != nil {
 		_ = m.finishJob(jobID, "cancelled", nil, 0, 0, ctx.Err().Error())
+		slog.Warn("job cancelled", "job_id", jobID, "type", "batch_token_refresh", "error", ctx.Err())
 		return
 	}
 	started := time.Now()
+	slog.Debug("token refresh upstream request started", "job_id", jobID, "site_id", siteID, "account_count", len(input.IDs))
 	data, statusCode, err := m.siteService.AdminPOSTJSON(ctx, siteID, "/api/v1/admin/accounts/batch-refresh", map[string]any{
 		"account_ids": input.IDs,
 	})
 	durationMS := time.Since(started).Milliseconds()
+	if err != nil {
+		slog.Warn("token refresh upstream request failed", "job_id", jobID, "site_id", siteID, "status_code", statusCode, "duration_ms", durationMS, "error", err)
+	} else {
+		slog.Debug("token refresh upstream request finished", "job_id", jobID, "site_id", siteID, "status_code", statusCode, "duration_ms", durationMS)
+	}
 	if ctx.Err() != nil {
 		items := buildTokenRefreshItems(input.IDs, input.AccountMeta, statusCode, durationMS, data, ctx.Err())
 		_ = m.updateJobProgress(jobID, items, 0, len(items))
 		_ = m.finishJob(jobID, "cancelled", items, 0, len(items), ctx.Err().Error())
+		slog.Warn("job cancelled", "job_id", jobID, "type", "batch_token_refresh", "done_count", len(items), "error", ctx.Err())
 		return
 	}
 	items := buildTokenRefreshItems(input.IDs, input.AccountMeta, statusCode, durationMS, data, err)
@@ -768,6 +950,7 @@ func (m *jobManager) runBatchTokenRefresh(ctx context.Context, jobID, siteID int
 		status = "failed"
 	}
 	_ = m.finishJob(jobID, status, items, successCount, failedCount, "")
+	slog.Info("job finished", "job_id", jobID, "type", "batch_token_refresh", "status", status, "success_count", successCount, "failed_count", failedCount, "duration_ms", durationMS)
 }
 
 func buildTokenRefreshItems(ids []int64, meta map[string]accountMeta, statusCode int, durationMS int64, data []byte, err error) []map[string]any {
@@ -1321,6 +1504,7 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 	if opsConcurrencyErr != nil {
 		result["opsConcurrencyError"] = opsConcurrencyErr.Error()
 	}
+	slog.InfoContext(r.Context(), "statistics loaded", "site_id", siteID, "start_date", startDate, "end_date", endDate, "granularity", granularity, "snapshot_status", snapshotStatus, "stats_status", statsStatus, "ranking_status", rankingStatus, "user_concurrency_status", userConcurrencyStatus, "account_concurrency_status", opsConcurrencyStatus)
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -1330,6 +1514,7 @@ func writeSiteUserConcurrency(w http.ResponseWriter, r *http.Request, siteServic
 		writeSiteError(w, err)
 		return
 	}
+	slog.InfoContext(r.Context(), "user concurrency refreshed", "site_id", siteID, "status_code", statusCode, "response_bytes", len(data))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"userConcurrency":       decodeJSONValue(data),
 		"userConcurrencyStatus": statusCode,
@@ -1342,6 +1527,7 @@ func writeSiteAccountConcurrency(w http.ResponseWriter, r *http.Request, siteSer
 		writeSiteError(w, err)
 		return
 	}
+	slog.InfoContext(r.Context(), "account concurrency refreshed", "site_id", siteID, "status_code", statusCode, "response_bytes", len(data))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"opsConcurrency":       decodeJSONValue(data),
 		"opsConcurrencyStatus": statusCode,

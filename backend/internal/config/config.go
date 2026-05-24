@@ -11,6 +11,9 @@ type Config struct {
 	Addr         string
 	DBPath       string
 	LogDir       string
+	LogLevel     string
+	LogMaxBytes  int64
+	LogBackups   int
 	LoginSecret  string
 	SecretKey    string
 	BasePath     string
@@ -36,6 +39,23 @@ func Load() Config {
 	}
 	logDir = resolveProjectRelativePath(logDir)
 
+	logLevel := os.Getenv("SUBADMIN_LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	logMaxBytes := int64(10 << 20)
+	if raw := os.Getenv("SUBADMIN_LOG_MAX_MB"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			logMaxBytes = int64(parsed) << 20
+		}
+	}
+	logBackups := 5
+	if raw := os.Getenv("SUBADMIN_LOG_MAX_BACKUPS"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			logBackups = parsed
+		}
+	}
+
 	basePath := normalizeBasePath(os.Getenv("SUBADMIN_BASE_PATH"))
 
 	cookieSecure := true
@@ -56,6 +76,9 @@ func Load() Config {
 		Addr:         addr,
 		DBPath:       dbPath,
 		LogDir:       logDir,
+		LogLevel:     logLevel,
+		LogMaxBytes:  logMaxBytes,
+		LogBackups:   logBackups,
 		LoginSecret:  os.Getenv("SUBADMIN_LOGIN_SECRET"),
 		SecretKey:    os.Getenv("SUBADMIN_SECRET_KEY"),
 		BasePath:     basePath,

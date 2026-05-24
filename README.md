@@ -81,6 +81,11 @@ subAdmin/
 | `SUBADMIN_COOKIE_SECURE` | `true` | 是否只允许安全连接携带 Cookie |
 | `SUBADMIN_SESSION_TTL` | `24h` | Session 有效期 |
 | `SUBADMIN_LOG_DIR` | `data/logs` | 本地日志目录，批量测试响应日志保存到该目录下 |
+| `SUBADMIN_LOG_LEVEL` | `info` | 应用日志等级，支持 `debug`、`info`、`warn`、`error` |
+| `SUBADMIN_LOG_MAX_MB` | `10` | 单个 `subadmin.log` 文件最大大小，单位 MiB |
+| `SUBADMIN_LOG_MAX_BACKUPS` | `5` | 日志轮转后保留的历史文件数量 |
+
+应用日志使用 JSON Lines 格式，同时写到标准输出和 `SUBADMIN_LOG_DIR/subadmin.log`。默认 `info` 等级；本机开发测试可设置 `SUBADMIN_LOG_LEVEL=debug` 记录更详细的请求、任务和操作信息。每个请求会返回并记录 `X-Request-ID`，业务日志会自动带上同一个 `request_id` 方便串联排查。
 
 示例：
 

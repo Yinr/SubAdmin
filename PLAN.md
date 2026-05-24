@@ -34,6 +34,7 @@ Implemented capabilities:
 - Batch token refresh runs through persisted Jobs, proxies sub2api's native batch-refresh endpoint with explicit confirmation, stores per-account outcomes, supports failed-item retry, and supports best-effort cancellation.
 - Jobs view lists recent jobs, reopens batch-test/token-refresh results, retries failed items, and cancels queued/running jobs.
 - Statistics dashboard uses real upstream dashboard and Ops endpoints, defaults to 24h/hourly, and supports isolated refresh for user/account concurrency panels.
+- Application logs use structured JSON Lines with configurable level, request IDs, and simple file rotation under `SUBADMIN_LOG_DIR`.
 - Protected OpenAPI, Swagger UI, and AI reference docs are available inside the logged-in UI.
 
 ## Completed Areas
@@ -120,6 +121,7 @@ Suggested UI shape:
 - Add targeted backend tests for auth, encryption, redaction, proxy behavior, Jobs, and import preview parsing.
 - Add upload size and batch size limits for import preview.
 - Improve operational error messages around upstream timeouts and partial failures.
+- Revisit log rotation/retention policy if long-running deployments need time-based retention or compression.
 - Refine dense UI areas only when concrete usability issues appear.
 
 ## Immediate Next Step
