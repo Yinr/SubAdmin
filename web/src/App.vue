@@ -46,6 +46,7 @@ const batchRefreshError = ref('')
 const importError = ref('')
 const accounts = ref<Account[]>([])
 const groups = ref<Group[]>([])
+const proxies = ref<Record<string, unknown>[]>([])
 const batchTestResults = ref<Record<string, unknown>[]>([])
 const batchRefreshResult = ref<Record<string, unknown> | null>(null)
 const importPreview = ref<ImportPreview | null>(null)
@@ -68,6 +69,7 @@ const loginLoading = ref(false)
 const sitesLoading = ref(false)
 const accountsLoading = ref(false)
 const groupsLoading = ref(false)
+const proxiesLoading = ref(false)
 const savingSite = ref(false)
 const docsLoading = ref(false)
 const statsLoading = ref(false)
@@ -139,10 +141,13 @@ const importForm = reactive({
   text: '',
   filename: '',
   defaultGroup: '',
+  groups: [] as string[],
   proxy: '',
   priority: '',
   concurrency: '',
   namePrefix: '',
+  models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'] as string[],
+  customModels: '',
 })
 
 const scheduleQuickFilter = ref('all')
@@ -239,6 +244,17 @@ const groupFilterItems = computed(() => groupOptions.value.filter((group) => gro
 const addableGroupOptions = computed(() => groupOptions.value.filter((group) => groupState(group.id) === 'any'))
 
 const upstreamGroupOptions = computed(() => [{ id: 'ungrouped', name: '未分组' }, ...groupOptions.value])
+
+const proxyOptions = computed(() => proxies.value.map((proxy) => ({ id: String(proxy.id || ''), name: String(proxy.name || proxy.id || '未命名代理') })).filter((proxy) => proxy.id))
+
+const importModelOptions = computed(() => {
+  const values = new Set(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'])
+  importForm.customModels.split(/[,\s]+/).forEach((model) => {
+    const value = model.trim()
+    if (value) values.add(value)
+  })
+  return Array.from(values)
+})
 
 const selectedAccountCount = computed(() => selectedAccountIds.value.size)
 
@@ -547,6 +563,7 @@ async function loadSites() {
       if (defaultSite) {
         activeSiteId.value = defaultSite.id
         await loadGroups()
+        await loadProxies()
         activeView.value = 'stats'
         await loadStatistics()
       } else {
@@ -632,8 +649,10 @@ function selectSite(site: Site) {
   accountCache.clear()
   filteredAccountIDsCache.clear()
   groups.value = []
+  proxies.value = []
   resetGroupFilters()
   loadGroups()
+  loadProxies()
   if (activeView.value === 'stats') loadStatistics()
 }
 
@@ -655,6 +674,27 @@ async function loadGroups() {
     groups.value = []
   } finally {
     groupsLoading.value = false
+  }
+}
+
+function normalizeProxies(payload: any): Record<string, unknown>[] {
+  if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload.data)) return payload.data
+  if (payload.data && Array.isArray(payload.data.items)) return payload.data.items
+  if (Array.isArray(payload.items)) return payload.items
+  return []
+}
+
+async function loadProxies() {
+  if (!activeSiteId.value) return
+  proxiesLoading.value = true
+  try {
+    const payload = await api<any>(`api/sites/${activeSiteId.value}/proxies`)
+    proxies.value = normalizeProxies(payload)
+  } catch {
+    proxies.value = []
+  } finally {
+    proxiesLoading.value = false
   }
 }
 
@@ -1020,9 +1060,11 @@ async function deleteImportTemplate(template: Record<string, unknown>) {
 
 function applyImportTemplate(template: Record<string, unknown>) {
   const data = (template.template || {}) as Record<string, unknown>
-  ;(['defaultGroup', 'proxy', 'priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
+  ;(['defaultGroup', 'proxy', 'priority', 'concurrency', 'namePrefix', 'customModels'] as const).forEach((key) => {
     importForm[key] = String(data[key] || '')
   })
+  importForm.groups = Array.isArray(data.groups) ? data.groups.map(String) : []
+  importForm.models = Array.isArray(data.models) ? data.models.map(String) : importForm.models
 }
 
 async function previewImport() {
@@ -1059,6 +1101,8 @@ function importPreviewSettings() {
     const value = String(importForm[key] || '').trim()
     if (value) settings[key] = value
   })
+  if (importForm.groups.length) settings.groups = importForm.groups
+  if (importForm.models.length) settings.models = importForm.models
   return settings
 }
 
@@ -1079,7 +1123,7 @@ async function handleImportFile(event: Event) {
 function clearImportPreview() {
   importPreview.value = null
   importError.value = ''
-  Object.assign(importForm, { text: '', filename: '', defaultGroup: '', proxy: '', priority: '', concurrency: '', namePrefix: '' })
+  Object.assign(importForm, { text: '', filename: '', defaultGroup: '', groups: [], proxy: '', priority: '', concurrency: '', namePrefix: '', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'], customModels: '' })
 }
 
 function stopAccountQueryTimer() {
@@ -2209,11 +2253,30 @@ onUnmounted(() => {
           <label>粘贴账号内容<textarea v-model="importForm.text" rows="10" placeholder="支持 JSON、JSON 数组、accounts 包装对象，以及常见 key=value / key: value 行格式。"></textarea></label>
           <div class="filter-grid">
             <label>选择文件<input type="file" accept=".json,.txt,.yaml,.yml,.csv" @change="handleImportFile" /></label>
-            <label>默认分组<input v-model="importForm.defaultGroup" placeholder="仅用于预览草稿" /></label>
-            <label>代理<input v-model="importForm.proxy" placeholder="仅用于预览草稿" /></label>
+            <label>默认分组<input v-model="importForm.defaultGroup" placeholder="可选；也可使用下方多选分组" /></label>
+            <label>代理
+              <select v-model="importForm.proxy" :disabled="proxiesLoading">
+                <option value="">不指定代理</option>
+                <option v-for="proxy in proxyOptions" :key="proxy.id" :value="proxy.id">{{ proxy.name }}</option>
+              </select>
+            </label>
             <label>优先级<input v-model="importForm.priority" type="number" placeholder="可选" /></label>
             <label>并发<input v-model="importForm.concurrency" type="number" placeholder="可选" /></label>
             <label>命名前缀<input v-model="importForm.namePrefix" placeholder="可选" /></label>
+            <label>自定义模型<input v-model="importForm.customModels" placeholder="用逗号或空格分隔更多模型" /></label>
+          </div>
+          <div class="section-card compact-section">
+            <h3>分组多选</h3>
+            <div class="chip-row wrap">
+              <label v-for="group in groupOptions" :key="group.id" class="inline-check chip-check"><input v-model="importForm.groups" type="checkbox" :value="group.id" /> {{ group.name }}</label>
+              <span v-if="!groupOptions.length" class="muted">暂无可选分组。</span>
+            </div>
+          </div>
+          <div class="section-card compact-section">
+            <h3>可用模型</h3>
+            <div class="chip-row wrap">
+              <label v-for="model in importModelOptions" :key="model" class="inline-check chip-check"><input v-model="importForm.models" type="checkbox" :value="model" /> {{ model }}</label>
+            </div>
           </div>
           <div class="form-actions">
             <button type="button" :disabled="importLoading || !activeSiteId" @click="previewImport">{{ importLoading ? '解析中...' : '生成预览' }}</button>
@@ -2252,18 +2315,19 @@ onUnmounted(() => {
           </div>
           <div class="result-scroll table-wrap">
             <table class="account-table result-table">
-              <thead><tr><th>#</th><th>状态</th><th>账号</th><th>平台/类型</th><th>凭据字段</th><th>缺失字段</th><th>警告</th></tr></thead>
+              <thead><tr><th>#</th><th>状态</th><th>账号</th><th>平台/类型</th><th>应用设置</th><th>凭据字段</th><th>缺失字段</th><th>警告</th></tr></thead>
               <tbody>
                 <tr v-for="item in importPreview.items" :key="String(item.index)">
                   <td>{{ item.index }}</td>
                   <td><span :class="importItemStatusClass(item)">{{ importItemStatus(item) }}</span></td>
                   <td><div class="cell-stack"><strong class="account-name">{{ importItemName(item) }}</strong><span v-if="item.group" class="muted account-note">分组：{{ item.group }}</span></div></td>
                   <td>{{ item.platform || '未知' }} / {{ item.type || '未知' }}</td>
+                  <td><div class="cell-stack compact"><span>分组：{{ importItemList(item, 'appliedGroups') }}</span><span>代理：{{ item.appliedProxy || '无' }}</span><span>模型：{{ importItemList(item, 'appliedModels') }}</span><span>优先级/并发：{{ item.appliedPriority || '默认' }} / {{ item.appliedConcurrency || '默认' }}</span></div></td>
                   <td>{{ importItemList(item, 'credentialFields') }}</td>
                   <td>{{ importItemList(item, 'missingFields') }}</td>
                   <td>{{ importItemList(item, 'warnings') }}</td>
                 </tr>
-                <tr v-if="!importPreview.items.length"><td colspan="7" class="muted">未解析到账号条目。</td></tr>
+                <tr v-if="!importPreview.items.length"><td colspan="8" class="muted">未解析到账号条目。</td></tr>
               </tbody>
             </table>
           </div>
@@ -3084,6 +3148,7 @@ input, select, textarea {
 textarea { resize: vertical; min-height: 180px; font: inherit; line-height: 1.5; }
 input[type="checkbox"] { width: auto; }
 .inline-check { display: flex; grid-auto-flow: column; grid-template-columns: auto 1fr; align-items: center; }
+.chip-check { width: auto; display: inline-flex; padding: 8px 10px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 999px; background: rgba(15, 23, 42, 0.42); }
 button {
   border: 0; border-radius: 12px; padding: 11px 14px; color: #fff; background: linear-gradient(135deg, #7c3aed, #2563eb);
   cursor: pointer; font-weight: 700;

@@ -274,6 +274,22 @@ func main() {
 			_, _ = w.Write(sanitizeJSONForBrowser(data))
 			return
 		}
+		if action == "proxies" {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			data, statusCode, err := siteService.AdminGET(r.Context(), id, "/api/v1/admin/proxies/all", r.URL.Query())
+			if err != nil {
+				writeSiteError(w, err)
+				return
+			}
+			slog.DebugContext(r.Context(), "proxies proxied", "site_id", id, "status_code", statusCode, "response_bytes", len(data))
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(statusCode)
+			_, _ = w.Write(sanitizeJSONForBrowser(data))
+			return
+		}
 		if action == "statistics" {
 			if r.Method != http.MethodGet {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1584,6 +1600,11 @@ type importPreviewItem struct {
 	Type             string   `json:"type"`
 	Name             string   `json:"name"`
 	Group            string   `json:"group,omitempty"`
+	AppliedGroups    []string `json:"appliedGroups,omitempty"`
+	AppliedProxy     string   `json:"appliedProxy,omitempty"`
+	AppliedModels    []string `json:"appliedModels,omitempty"`
+	AppliedPriority  string   `json:"appliedPriority,omitempty"`
+	AppliedConcurrency string `json:"appliedConcurrency,omitempty"`
 	CredentialFields []string `json:"credentialFields"`
 	MissingFields    []string `json:"missingFields"`
 	Warnings         []string `json:"warnings"`
@@ -1597,7 +1618,8 @@ func writeImportPreview(w http.ResponseWriter, r *http.Request, database *sql.DB
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	items, warnings := parseImportPreview(input.Text)
+	settings := sanitizeImportSettings(input.Settings)
+	items, warnings := parseImportPreview(input.Text, settings)
 	markImportDuplicates(items)
 	summary := map[string]any{
 		"total":      len(items),
@@ -1606,13 +1628,13 @@ func writeImportPreview(w http.ResponseWriter, r *http.Request, database *sql.DB
 		"duplicates": countImportItems(items, func(item importPreviewItem) bool { return item.DuplicateKey != "" }),
 	}
 	slog.InfoContext(r.Context(), "import preview generated", "site_id", siteID, "filename", input.Filename, "total", summary["total"], "recognized", summary["recognized"], "invalid", summary["invalid"], "duplicates", summary["duplicates"])
-	writeAuditLog(database, r, &siteID, "import.preview", "account", len(items), map[string]any{"filename": input.Filename, "settings": sanitizeImportSettings(input.Settings)}, map[string]any{"summary": summary})
+	writeAuditLog(database, r, &siteID, "import.preview", "account", len(items), map[string]any{"filename": input.Filename, "settings": settings}, map[string]any{"summary": summary})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":    items,
 		"warnings": warnings,
 		"errors":   []string{},
 		"summary":  summary,
-		"settings": sanitizeImportSettings(input.Settings),
+		"settings": settings,
 	})
 }
 
@@ -1665,12 +1687,13 @@ func decodeImportPreviewInput(r *http.Request) (importPreviewInput, error) {
 	return input, nil
 }
 
-func parseImportPreview(text string) ([]importPreviewItem, []string) {
+func parseImportPreview(text string, settings map[string]any) ([]importPreviewItem, []string) {
 	chunks := splitImportChunks(text)
 	items := make([]importPreviewItem, 0, len(chunks))
 	warnings := []string{}
 	for index, chunk := range chunks {
 		item := buildImportPreviewItem(index+1, chunk)
+		applyImportPreviewSettings(&item, settings)
 		if !item.Recognized {
 			warnings = append(warnings, fmt.Sprintf("第 %d 条未识别为账号格式", index+1))
 		}
@@ -1680,6 +1703,57 @@ func parseImportPreview(text string) ([]importPreviewItem, []string) {
 		warnings = append(warnings, "未解析到账号条目")
 	}
 	return items, warnings
+}
+
+func applyImportPreviewSettings(item *importPreviewItem, settings map[string]any) {
+	if item == nil || len(settings) == 0 {
+		return
+	}
+	namePrefix := strings.TrimSpace(fmt.Sprint(settings["namePrefix"]))
+	if namePrefix != "" && item.Name != "" && !strings.HasPrefix(item.Name, namePrefix) {
+		item.Name = namePrefix + item.Name
+	}
+	item.AppliedGroups = stringSliceSetting(settings["groups"])
+	if len(item.AppliedGroups) == 0 {
+		if group := strings.TrimSpace(fmt.Sprint(settings["defaultGroup"])); group != "" && group != "<nil>" {
+			item.AppliedGroups = []string{group}
+		}
+	}
+	if proxy := strings.TrimSpace(fmt.Sprint(settings["proxy"])); proxy != "" && proxy != "<nil>" {
+		item.AppliedProxy = proxy
+	}
+	item.AppliedModels = stringSliceSetting(settings["models"])
+	if priority := strings.TrimSpace(fmt.Sprint(settings["priority"])); priority != "" && priority != "<nil>" {
+		item.AppliedPriority = priority
+	}
+	if concurrency := strings.TrimSpace(fmt.Sprint(settings["concurrency"])); concurrency != "" && concurrency != "<nil>" {
+		item.AppliedConcurrency = concurrency
+	}
+}
+
+func stringSliceSetting(value any) []string {
+	result := []string{}
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" && text != "<nil>" {
+				result = append(result, text)
+			}
+		}
+	case []string:
+		for _, item := range typed {
+			if text := strings.TrimSpace(item); text != "" {
+				result = append(result, text)
+			}
+		}
+	case string:
+		for _, item := range strings.Split(typed, ",") {
+			if text := strings.TrimSpace(item); text != "" {
+				result = append(result, text)
+			}
+		}
+	}
+	return result
 }
 
 func splitImportChunks(text string) []string {
