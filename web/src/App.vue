@@ -20,7 +20,7 @@ type Account = Record<string, unknown>
 type Group = Record<string, unknown>
 type JobRecord = Record<string, unknown>
 type GroupState = 'any' | 'include' | 'exclude'
-type ViewMode = 'stats' | 'accounts' | 'import' | 'jobs' | 'sites' | 'docs'
+type ViewMode = 'stats' | 'accounts' | 'import' | 'jobs' | 'audit' | 'sites' | 'docs'
 type ApiOptions = RequestInit & { timeoutMs?: number }
 type ImportPreviewItem = Record<string, unknown>
 type ImportPreview = {
@@ -52,6 +52,7 @@ const importPreview = ref<ImportPreview | null>(null)
 const statistics = ref<Record<string, unknown> | null>(null)
 const batchTestJob = ref<JobRecord | null>(null)
 const recentJobs = ref<JobRecord[]>([])
+const auditLogs = ref<Record<string, unknown>[]>([])
 const batchTestScroll = ref<HTMLElement | null>(null)
 const batchRefreshScroll = ref<HTMLElement | null>(null)
 const selectedAccountIds = ref<Set<string>>(new Set())
@@ -75,9 +76,11 @@ const batchTesting = ref(false)
 const batchRefreshing = ref(false)
 const batchCollecting = ref(false)
 const jobsLoading = ref(false)
+const auditLoading = ref(false)
 const importLoading = ref(false)
 const activeView = ref<ViewMode>('stats')
 const statsError = ref('')
+const auditError = ref('')
 const batchTestTotal = ref(0)
 const batchTestDone = ref(0)
 const batchRefreshTotal = ref(0)
@@ -948,6 +951,24 @@ async function loadRecentJobs() {
   }
 }
 
+async function loadAuditLogs() {
+  auditError.value = ''
+  auditLoading.value = true
+  try {
+    const payload = await api<{ items: Record<string, unknown>[] }>('api/audit-logs')
+    auditLogs.value = payload.items || []
+  } catch (error) {
+    auditError.value = error instanceof Error ? error.message : '加载审计日志失败'
+  } finally {
+    auditLoading.value = false
+  }
+}
+
+function showAudit() {
+  activeView.value = 'audit'
+  loadAuditLogs()
+}
+
 async function previewImport() {
   importError.value = ''
   importPreview.value = null
@@ -1767,6 +1788,11 @@ function importItemName(item: ImportPreviewItem) {
   return String(item.name || '未命名')
 }
 
+function auditSummaryText(value: unknown) {
+  if (!value || typeof value !== 'object') return '{}'
+  return JSON.stringify(value)
+}
+
 function waitForBatchPoll() {
   return new Promise((resolve) => {
     batchTestPollTimer = window.setTimeout(resolve, 1200)
@@ -1906,6 +1932,7 @@ onUnmounted(() => {
           <button :class="activeView === 'accounts' ? '' : 'secondary'" @click="activeView = 'accounts'">账号</button>
           <button :class="activeView === 'import' ? '' : 'secondary'" @click="activeView = 'import'">导入</button>
           <button :class="activeView === 'jobs' ? '' : 'secondary'" @click="showJobs">任务</button>
+          <button :class="activeView === 'audit' ? '' : 'secondary'" @click="showAudit">审计</button>
           <button :class="activeView === 'sites' ? '' : 'secondary'" @click="activeView = 'sites'">站点</button>
           <button :class="activeView === 'docs' ? '' : 'secondary'" @click="showDocs">文档</button>
           <button class="secondary" @click="logout">退出登录</button>
@@ -2259,6 +2286,34 @@ onUnmounted(() => {
           </div>
           <pre class="inline-json result-json">{{ selectedTaskResultJSON() }}</pre>
         </section>
+      </section>
+
+      <section v-else-if="activeView === 'audit'" class="panel content-panel">
+        <div class="panel-head">
+          <div>
+            <h2>审计日志</h2>
+            <p class="muted">记录站点写操作、任务动作和导入预览摘要；敏感字段会脱敏。</p>
+          </div>
+          <button class="secondary" :disabled="auditLoading" @click="loadAuditLogs">{{ auditLoading ? '加载中...' : '刷新审计' }}</button>
+        </div>
+        <p v-if="auditError" class="error">{{ auditError }}</p>
+        <div class="result-scroll table-wrap jobs-scroll">
+          <table class="account-table result-table">
+            <thead><tr><th>ID</th><th>动作</th><th>站点</th><th>目标</th><th>请求摘要</th><th>结果摘要</th><th>时间</th></tr></thead>
+            <tbody>
+              <tr v-for="log in auditLogs" :key="String(log.id)">
+                <td>#{{ log.id }}</td>
+                <td>{{ log.action }}</td>
+                <td>{{ log.siteId || '全局' }}</td>
+                <td>{{ log.targetType }} · {{ log.targetCount || 0 }}</td>
+                <td><code>{{ auditSummaryText(log.requestSummary) }}</code></td>
+                <td><code>{{ auditSummaryText(log.resultSummary) }}</code></td>
+                <td>{{ formatDateTime(log.createdAt) }}</td>
+              </tr>
+              <tr v-if="!auditLogs.length"><td colspan="7" class="muted">暂无审计日志。</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section v-else-if="activeView === 'docs'" class="panel docs-panel">

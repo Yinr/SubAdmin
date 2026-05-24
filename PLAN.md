@@ -36,6 +36,7 @@ Implemented capabilities:
 - Statistics dashboard uses real upstream dashboard and Ops endpoints, defaults to 24h/hourly, and supports isolated refresh for user/account concurrency panels.
 - Application logs use structured JSON Lines with configurable level, request IDs, and simple file rotation under `SUBADMIN_LOG_DIR`.
 - Import page supports pasted text or small files, parses known account-shaped content server-side, and returns a sanitized preview without upstream writes.
+- Audit logs record site writes, job actions, and import preview summaries; the Audit page lists recent audit records.
 - Protected OpenAPI, Swagger UI, and AI reference docs are available inside the logged-in UI.
 
 ## Completed Areas
@@ -54,12 +55,12 @@ Keep completed implementation details out of this plan unless they affect future
 
 ## Current Limitations
 
-- `import_templates` and `audit_logs` tables exist, but there is no complete UI/API workflow using them yet.
+- `import_templates` table exists, but there is no complete UI/API workflow using it yet.
 - Jobs are single-process goroutines; there is no distributed worker, durable queue, cron scheduler, or parallel execution model.
 - Per-item job outcomes are stored in `result_json`; there is no `job_items` table yet.
 - Filtered account ID collection is still frontend-driven because upstream and local filter semantics are not fully reproducible server-side.
 - Token refresh cancellation is best-effort: SubAdmin can cancel local tracking/request state, but it cannot roll back upstream refresh work already performed by sub2api.
-- High-risk account writes and import execution remain disabled until confirmation, job tracking, and audit logging are implemented.
+- High-risk account writes and import execution remain disabled until explicit confirmation and job execution are implemented on top of audit logging.
 
 ## Current Import Preview Scope
 
@@ -82,12 +83,6 @@ Current scope:
 - Store reusable import defaults in SQLite.
 - Apply templates during import preview.
 - Keep templates server-side and avoid exposing sensitive credentials.
-
-### Audit Logs
-
-- Record site changes, import preview/execution, job actions, and future account write operations.
-- Include action, site, target identifiers/counts, timestamp, session/IP metadata, request summary, and result summary.
-- Redact sensitive fields before writing audit records.
 
 ### Import Execution
 
@@ -115,4 +110,4 @@ Current scope:
 
 ## Immediate Next Step
 
-Add import templates and audit-log recording before any import execution or other high-risk account mutations.
+Add import templates, then design confirmed import execution through Jobs without bypassing audit logging.

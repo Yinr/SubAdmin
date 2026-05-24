@@ -43,5 +43,6 @@ This directory contains the management application for sub2api.
 - Statistics dashboard based on real upstream dashboard and Ops data.
 - Persisted task implementation for batch workflows, including retry and best-effort cancellation.
 - Import preview without upstream writes.
+- Audit log recording and read-only audit view for key operations.
 - Protected docs page for logged-in users.
-- Next planned product work is import templates and audit-log recording before any import execution.
+- Next planned product work is import templates before any import execution.

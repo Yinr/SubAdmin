@@ -137,6 +137,7 @@ func main() {
 	})
 	mux.HandleFunc("/docs", protectedDocsHandler(authManager))
 	mux.HandleFunc("/docs/", protectedDocsHandler(authManager))
+	mux.HandleFunc("/api/audit-logs", auditLogsHandler(authManager, store.DB()))
 	mux.HandleFunc("/api/jobs", jobsHandler(authManager, jobService))
 	mux.HandleFunc("/api/jobs/", jobDetailHandler(authManager, jobService))
 	mux.HandleFunc("/api/sites", func(w http.ResponseWriter, r *http.Request) {
@@ -168,6 +169,7 @@ func main() {
 				return
 			}
 			slog.InfoContext(r.Context(), "site created", "site_id", item.ID, "site_name", item.Name)
+			writeAuditLog(store.DB(), r, &item.ID, "site.create", "site", 1, map[string]any{"name": item.Name, "baseUrl": item.BaseURL}, map[string]any{"ok": true})
 			writeJSON(w, http.StatusCreated, item)
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -251,7 +253,7 @@ func main() {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			writeImportPreview(w, r, id)
+			writeImportPreview(w, r, store.DB(), id)
 			return
 		}
 		if action == "groups" {
@@ -319,6 +321,7 @@ func main() {
 				return
 			}
 			slog.InfoContext(r.Context(), "site updated", "site_id", item.ID, "site_name", item.Name)
+			writeAuditLog(store.DB(), r, &item.ID, "site.update", "site", 1, map[string]any{"name": item.Name, "baseUrl": item.BaseURL}, map[string]any{"ok": true})
 			writeJSON(w, http.StatusOK, item)
 		case http.MethodDelete:
 			if err := siteService.Delete(r.Context(), id); err != nil {
@@ -326,6 +329,7 @@ func main() {
 				return
 			}
 			slog.WarnContext(r.Context(), "site deleted", "site_id", id)
+			writeAuditLog(store.DB(), r, &id, "site.delete", "site", 1, map[string]any{"siteId": id}, map[string]any{"ok": true})
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		default:
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -638,6 +642,102 @@ type jobRecord struct {
 	FinishedAt   *int64          `json:"finishedAt,omitempty"`
 }
 
+type auditLogRecord struct {
+	ID             int64           `json:"id"`
+	SiteID         *int64          `json:"siteId,omitempty"`
+	Action         string          `json:"action"`
+	TargetType     string          `json:"targetType"`
+	TargetCount    int             `json:"targetCount"`
+	RequestSummary json.RawMessage `json:"requestSummary"`
+	ResultSummary  json.RawMessage `json:"resultSummary"`
+	IP             string          `json:"ip"`
+	UserAgent      string          `json:"userAgent"`
+	CreatedAt      int64           `json:"createdAt"`
+}
+
+func auditLogsHandler(authManager *auth.Manager, database *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireAuth(w, r, authManager) {
+			return
+		}
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		items, err := listAuditLogs(r.Context(), database, 100)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "list audit logs failed")
+			return
+		}
+		slog.DebugContext(r.Context(), "audit logs listed", "count", len(items))
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}
+}
+
+func listAuditLogs(ctx context.Context, database *sql.DB, limit int) ([]auditLogRecord, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rows, err := database.QueryContext(ctx, `
+SELECT id, site_id, action, target_type, target_count, request_summary_json, result_summary_json, ip, user_agent, created_at
+FROM audit_logs ORDER BY id DESC LIMIT ?
+`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []auditLogRecord{}
+	for rows.Next() {
+		var item auditLogRecord
+		var siteID sql.NullInt64
+		var requestJSON, resultJSON string
+		if err := rows.Scan(&item.ID, &siteID, &item.Action, &item.TargetType, &item.TargetCount, &requestJSON, &resultJSON, &item.IP, &item.UserAgent, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		if siteID.Valid {
+			item.SiteID = &siteID.Int64
+		}
+		item.RequestSummary = json.RawMessage(requestJSON)
+		item.ResultSummary = json.RawMessage(resultJSON)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func writeAuditLog(database *sql.DB, r *http.Request, siteID *int64, action, targetType string, targetCount int, requestSummary, resultSummary map[string]any) {
+	requestJSON, err := json.Marshal(sanitizeAuditSummary(requestSummary))
+	if err != nil {
+		requestJSON = []byte(`{}`)
+	}
+	resultJSON, err := json.Marshal(sanitizeAuditSummary(resultSummary))
+	if err != nil {
+		resultJSON = []byte(`{}`)
+	}
+	var nullableSiteID any
+	if siteID != nil {
+		nullableSiteID = *siteID
+	}
+	_, err = database.ExecContext(r.Context(), `
+INSERT INTO audit_logs (site_id, action, target_type, target_count, request_summary_json, result_summary_json, ip, user_agent, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`, nullableSiteID, action, targetType, targetCount, string(requestJSON), string(resultJSON), r.RemoteAddr, userAgentFamily(r.UserAgent()), time.Now().Unix())
+	if err != nil {
+		slog.WarnContext(r.Context(), "write audit log failed", "action", action, "error", err)
+	}
+}
+
+func sanitizeAuditSummary(value map[string]any) map[string]any {
+	result := map[string]any{}
+	for key, child := range value {
+		if isSensitiveKey(key) {
+			result[key] = "[redacted]"
+			continue
+		}
+		result[key] = child
+	}
+	return result
+}
+
 func newJobManager(db *sql.DB, siteService *sites.Service, logDir string) *jobManager {
 	return &jobManager{db: db, siteService: siteService, logDir: logDir, cancels: map[int64]context.CancelFunc{}}
 }
@@ -703,6 +803,7 @@ func jobDetailHandler(authManager *auth.Manager, manager *jobManager) http.Handl
 				return
 			}
 			slog.WarnContext(r.Context(), "job cancel requested", "job_id", id, "status", job.Status, "type", job.Type)
+			writeAuditLog(manager.db, r, job.SiteID, "job.cancel", job.Type, job.TotalCount, map[string]any{"jobId": id}, map[string]any{"status": job.Status})
 			writeJSON(w, http.StatusOK, job)
 		case "retry-failed":
 			if r.Method != http.MethodPost {
@@ -715,6 +816,7 @@ func jobDetailHandler(authManager *auth.Manager, manager *jobManager) http.Handl
 				return
 			}
 			slog.InfoContext(r.Context(), "job retry created", "source_job_id", id, "new_job_id", job.ID, "type", job.Type, "total_count", job.TotalCount)
+			writeAuditLog(manager.db, r, job.SiteID, "job.retry_failed", job.Type, job.TotalCount, map[string]any{"sourceJobId": id, "newJobId": job.ID}, map[string]any{"status": job.Status})
 			writeJSON(w, http.StatusCreated, job)
 		default:
 			writeError(w, http.StatusNotFound, "job action not found")
@@ -763,6 +865,7 @@ func writeCreateBatchAccountTestJob(w http.ResponseWriter, r *http.Request, mana
 		return
 	}
 	slog.InfoContext(r.Context(), "job created", "job_id", job.ID, "type", job.Type, "site_id", siteID, "total_count", job.TotalCount)
+	writeAuditLog(manager.db, r, &siteID, "job.create", job.Type, job.TotalCount, map[string]any{"jobId": job.ID, "type": job.Type}, map[string]any{"status": job.Status})
 	writeJSON(w, http.StatusCreated, job)
 }
 
@@ -782,6 +885,7 @@ func writeCreateBatchTokenRefreshJob(w http.ResponseWriter, r *http.Request, man
 		return
 	}
 	slog.InfoContext(r.Context(), "job created", "job_id", job.ID, "type", job.Type, "site_id", siteID, "total_count", job.TotalCount)
+	writeAuditLog(manager.db, r, &siteID, "job.create", job.Type, job.TotalCount, map[string]any{"jobId": job.ID, "type": job.Type}, map[string]any{"status": job.Status})
 	writeJSON(w, http.StatusCreated, job)
 }
 
@@ -1351,7 +1455,7 @@ type importPreviewItem struct {
 	RawPreview       string   `json:"rawPreview,omitempty"`
 }
 
-func writeImportPreview(w http.ResponseWriter, r *http.Request, siteID int64) {
+func writeImportPreview(w http.ResponseWriter, r *http.Request, database *sql.DB, siteID int64) {
 	input, err := decodeImportPreviewInput(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -1366,6 +1470,7 @@ func writeImportPreview(w http.ResponseWriter, r *http.Request, siteID int64) {
 		"duplicates": countImportItems(items, func(item importPreviewItem) bool { return item.DuplicateKey != "" }),
 	}
 	slog.InfoContext(r.Context(), "import preview generated", "site_id", siteID, "filename", input.Filename, "total", summary["total"], "recognized", summary["recognized"], "invalid", summary["invalid"], "duplicates", summary["duplicates"])
+	writeAuditLog(database, r, &siteID, "import.preview", "account", len(items), map[string]any{"filename": input.Filename, "settings": sanitizeImportSettings(input.Settings)}, map[string]any{"summary": summary})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items":    items,
 		"warnings": warnings,
