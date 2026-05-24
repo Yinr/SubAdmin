@@ -36,6 +36,7 @@ Implemented capabilities:
 - Statistics dashboard uses real upstream dashboard and Ops endpoints, defaults to 24h/hourly, and supports isolated refresh for user/account concurrency panels.
 - Application logs use structured JSON Lines with configurable level, request IDs, and simple file rotation under `SUBADMIN_LOG_DIR`.
 - Import page supports pasted text or small files, parses known account-shaped content server-side, and returns a sanitized preview without upstream writes.
+- Import templates can save and apply non-sensitive preview defaults.
 - Audit logs record site writes, job actions, and import preview summaries; the Audit page lists recent audit records.
 - Protected OpenAPI, Swagger UI, and AI reference docs are available inside the logged-in UI.
 
@@ -55,7 +56,7 @@ Keep completed implementation details out of this plan unless they affect future
 
 ## Current Limitations
 
-- `import_templates` table exists, but there is no complete UI/API workflow using it yet.
+- Import templates currently cover preview defaults only; they do not store account credentials or execute imports.
 - Jobs are single-process goroutines; there is no distributed worker, durable queue, cron scheduler, or parallel execution model.
 - Per-item job outcomes are stored in `result_json`; there is no `job_items` table yet.
 - Filtered account ID collection is still frontend-driven because upstream and local filter semantics are not fully reproducible server-side.
@@ -77,12 +78,6 @@ Current scope:
 - Do not create accounts.
 
 ## Planned After Import Preview
-
-### Import Templates
-
-- Store reusable import defaults in SQLite.
-- Apply templates during import preview.
-- Keep templates server-side and avoid exposing sensitive credentials.
 
 ### Import Execution
 
@@ -110,4 +105,4 @@ Current scope:
 
 ## Immediate Next Step
 
-Add import templates, then design confirmed import execution through Jobs without bypassing audit logging.
+Design confirmed import execution through Jobs without bypassing audit logging.

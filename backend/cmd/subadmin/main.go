@@ -138,6 +138,8 @@ func main() {
 	mux.HandleFunc("/docs", protectedDocsHandler(authManager))
 	mux.HandleFunc("/docs/", protectedDocsHandler(authManager))
 	mux.HandleFunc("/api/audit-logs", auditLogsHandler(authManager, store.DB()))
+	mux.HandleFunc("/api/import-templates", importTemplatesHandler(authManager, store.DB()))
+	mux.HandleFunc("/api/import-templates/", importTemplateDetailHandler(authManager, store.DB()))
 	mux.HandleFunc("/api/jobs", jobsHandler(authManager, jobService))
 	mux.HandleFunc("/api/jobs/", jobDetailHandler(authManager, jobService))
 	mux.HandleFunc("/api/sites", func(w http.ResponseWriter, r *http.Request) {
@@ -1439,6 +1441,140 @@ type importPreviewInput struct {
 	Text     string         `json:"text"`
 	Filename string         `json:"filename"`
 	Settings map[string]any `json:"settings"`
+}
+
+type importTemplateRecord struct {
+	ID        int64           `json:"id"`
+	Name      string          `json:"name"`
+	SiteID    *int64          `json:"siteId,omitempty"`
+	Template  json.RawMessage `json:"template"`
+	Enabled   bool            `json:"enabled"`
+	CreatedAt int64           `json:"createdAt"`
+	UpdatedAt int64           `json:"updatedAt"`
+}
+
+func importTemplatesHandler(authManager *auth.Manager, database *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireAuth(w, r, authManager) {
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			items, err := listImportTemplates(r.Context(), database)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "list import templates failed")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"items": items})
+		case http.MethodPost:
+			var input struct {
+				Name     string         `json:"name"`
+				SiteID   *int64         `json:"siteId"`
+				Template map[string]any `json:"template"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid json body")
+				return
+			}
+			item, err := createImportTemplate(r.Context(), database, input.Name, input.SiteID, input.Template)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeAuditLog(database, r, input.SiteID, "import_template.create", "import_template", 1, map[string]any{"name": item.Name}, map[string]any{"ok": true, "templateId": item.ID})
+			writeJSON(w, http.StatusCreated, item)
+		default:
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	}
+}
+
+func importTemplateDetailHandler(authManager *auth.Manager, database *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireAuth(w, r, authManager) {
+			return
+		}
+		id, err := strconv.ParseInt(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/import-templates/"), "/"), 10, 64)
+		if err != nil || id <= 0 {
+			writeError(w, http.StatusNotFound, "template not found")
+			return
+		}
+		if r.Method != http.MethodDelete {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if err := deleteImportTemplate(r.Context(), database, id); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeAuditLog(database, r, nil, "import_template.delete", "import_template", 1, map[string]any{"templateId": id}, map[string]any{"ok": true})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}
+}
+
+func listImportTemplates(ctx context.Context, database *sql.DB) ([]importTemplateRecord, error) {
+	rows, err := database.QueryContext(ctx, `SELECT id, name, site_id, template_json, enabled, created_at, updated_at FROM import_templates WHERE enabled = 1 ORDER BY id DESC LIMIT 100`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []importTemplateRecord{}
+	for rows.Next() {
+		var item importTemplateRecord
+		var siteID sql.NullInt64
+		var templateJSON string
+		var enabled int
+		if err := rows.Scan(&item.ID, &item.Name, &siteID, &templateJSON, &enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if siteID.Valid {
+			item.SiteID = &siteID.Int64
+		}
+		item.Template = json.RawMessage(templateJSON)
+		item.Enabled = enabled == 1
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func createImportTemplate(ctx context.Context, database *sql.DB, name string, siteID *int64, template map[string]any) (*importTemplateRecord, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("name is required")
+	}
+	templateJSON, err := json.Marshal(sanitizeImportSettings(template))
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	var nullableSiteID any
+	if siteID != nil && *siteID > 0 {
+		nullableSiteID = *siteID
+	}
+	res, err := database.ExecContext(ctx, `INSERT INTO import_templates (name, site_id, template_json, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)`, name, nullableSiteID, string(templateJSON), now, now)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	return &importTemplateRecord{ID: id, Name: name, SiteID: siteID, Template: json.RawMessage(templateJSON), Enabled: true, CreatedAt: now, UpdatedAt: now}, nil
+}
+
+func deleteImportTemplate(ctx context.Context, database *sql.DB, id int64) error {
+	res, err := database.ExecContext(ctx, `UPDATE import_templates SET enabled = 0, updated_at = ? WHERE id = ?`, time.Now().Unix(), id)
+	if err != nil {
+		return err
+	}
+	count, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return errors.New("template not found")
+	}
+	return nil
 }
 
 type importPreviewItem struct {

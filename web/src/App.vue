@@ -53,6 +53,7 @@ const statistics = ref<Record<string, unknown> | null>(null)
 const batchTestJob = ref<JobRecord | null>(null)
 const recentJobs = ref<JobRecord[]>([])
 const auditLogs = ref<Record<string, unknown>[]>([])
+const importTemplates = ref<Record<string, unknown>[]>([])
 const batchTestScroll = ref<HTMLElement | null>(null)
 const batchRefreshScroll = ref<HTMLElement | null>(null)
 const selectedAccountIds = ref<Set<string>>(new Set())
@@ -78,9 +79,11 @@ const batchCollecting = ref(false)
 const jobsLoading = ref(false)
 const auditLoading = ref(false)
 const importLoading = ref(false)
+const importTemplatesLoading = ref(false)
 const activeView = ref<ViewMode>('stats')
 const statsError = ref('')
 const auditError = ref('')
+const importTemplateName = ref('')
 const batchTestTotal = ref(0)
 const batchTestDone = ref(0)
 const batchRefreshTotal = ref(0)
@@ -967,6 +970,59 @@ async function loadAuditLogs() {
 function showAudit() {
   activeView.value = 'audit'
   loadAuditLogs()
+}
+
+function showImport() {
+  activeView.value = 'import'
+  loadImportTemplates()
+}
+
+async function loadImportTemplates() {
+  importTemplatesLoading.value = true
+  try {
+    const payload = await api<{ items: Record<string, unknown>[] }>('api/import-templates')
+    importTemplates.value = payload.items || []
+  } catch (error) {
+    importError.value = error instanceof Error ? error.message : '加载导入模板失败'
+  } finally {
+    importTemplatesLoading.value = false
+  }
+}
+
+async function saveImportTemplate() {
+  const name = importTemplateName.value.trim()
+  if (!name) {
+    importError.value = '请填写模板名称'
+    return
+  }
+  try {
+    await api('api/import-templates', {
+      method: 'POST',
+      body: JSON.stringify({ name, siteId: activeSiteId.value, template: importPreviewSettings() }),
+    })
+    importTemplateName.value = ''
+    await loadImportTemplates()
+  } catch (error) {
+    importError.value = error instanceof Error ? error.message : '保存导入模板失败'
+  }
+}
+
+async function deleteImportTemplate(template: Record<string, unknown>) {
+  const id = Number(template.id)
+  if (!id || !window.confirm(`确定删除模板「${template.name || id}」吗？`)) return
+  try {
+    await api(`api/import-templates/${id}`, { method: 'DELETE' })
+    await loadImportTemplates()
+  } catch (error) {
+    importError.value = error instanceof Error ? error.message : '删除导入模板失败'
+  }
+}
+
+function applyImportTemplate(template: Record<string, unknown>) {
+  const data = (template.template || {}) as Record<string, unknown>
+  ;(['defaultGroup', 'proxy', 'priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
+    importForm[key] = String(data[key] || '')
+  })
 }
 
 async function previewImport() {
@@ -1930,7 +1986,7 @@ onUnmounted(() => {
         <div class="topbar-actions">
           <button :class="activeView === 'stats' ? '' : 'secondary'" @click="showStats">统计</button>
           <button :class="activeView === 'accounts' ? '' : 'secondary'" @click="activeView = 'accounts'">账号</button>
-          <button :class="activeView === 'import' ? '' : 'secondary'" @click="activeView = 'import'">导入</button>
+          <button :class="activeView === 'import' ? '' : 'secondary'" @click="showImport">导入</button>
           <button :class="activeView === 'jobs' ? '' : 'secondary'" @click="showJobs">任务</button>
           <button :class="activeView === 'audit' ? '' : 'secondary'" @click="showAudit">审计</button>
           <button :class="activeView === 'sites' ? '' : 'secondary'" @click="activeView = 'sites'">站点</button>
@@ -2164,6 +2220,24 @@ onUnmounted(() => {
             <span class="muted">当前站点：{{ activeSite?.name || '未选择' }}<template v-if="importForm.filename"> · 文件：{{ importForm.filename }}</template></span>
           </div>
         </div>
+        <section class="result-panel import-template-panel">
+          <div class="panel-head">
+            <div>
+              <h2>导入模板</h2>
+              <p class="muted">保存和套用预览默认设置；模板不会保存账号凭据。</p>
+            </div>
+            <button class="secondary" :disabled="importTemplatesLoading" @click="loadImportTemplates">{{ importTemplatesLoading ? '加载中...' : '刷新模板' }}</button>
+          </div>
+          <div class="filter-grid">
+            <label>模板名称<input v-model="importTemplateName" placeholder="例如 Anthropic OAuth 默认设置" /></label>
+            <button type="button" :disabled="!importTemplateName.trim()" @click="saveImportTemplate">保存当前设置为模板</button>
+          </div>
+          <div class="active-filter-chips">
+            <button v-for="template in importTemplates" :key="String(template.id)" type="button" class="filter-chip" @click="applyImportTemplate(template)">{{ template.name }}</button>
+            <button v-for="template in importTemplates" :key="`delete-${template.id}`" type="button" class="filter-chip danger" @click="deleteImportTemplate(template)">删除 {{ template.name }}</button>
+            <span v-if="!importTemplates.length" class="muted">暂无模板。</span>
+          </div>
+        </section>
         <section v-if="importPreview" class="batch-results result-panel">
           <div class="panel-head">
             <div>
