@@ -59,6 +59,8 @@ const groupsLoading = ref(false)
 const savingSite = ref(false)
 const docsLoading = ref(false)
 const statsLoading = ref(false)
+const userConcurrencyLoading = ref(false)
+const accountConcurrencyLoading = ref(false)
 const batchTesting = ref(false)
 const batchRefreshing = ref(false)
 const batchCollecting = ref(false)
@@ -69,6 +71,10 @@ const batchTestTotal = ref(0)
 const batchTestDone = ref(0)
 const batchRefreshTotal = ref(0)
 const batchRefreshDone = ref(0)
+const batchCollectPage = ref(0)
+const batchCollectTotalPages = ref(0)
+const batchCollectFound = ref(0)
+const batchResultFilter = ref<'all' | 'failed' | 'success' | 'pending'>('all')
 const accountPageJump = ref('')
 const accountQueryElapsedSeconds = ref(0)
 const accountQuerySlow = ref(false)
@@ -77,6 +83,7 @@ const groupPopoverAccount = ref<Account | null>(null)
 const chartHoverIndex = ref<number | null>(null)
 const groupPopoverPosition = reactive({ top: 0, left: 0 })
 const filteredAccountIDsCache = new Map<string, number[]>()
+const accountMetaCache = new Map<string, { name: string; note: string }>()
 const accountAbortController = ref<AbortController | null>(null)
 let accountQueryTimer: number | null = null
 let accountQueryCancelled = false
@@ -116,10 +123,10 @@ const groupToAdd = ref('')
 const groupFilterStates = reactive<Record<string, GroupState>>({})
 
 const statsRange = reactive({
-  preset: '7d',
-  startDate: formatDateInput(addDays(new Date(), -7)),
+  preset: '24h',
+  startDate: formatDateInput(addDays(new Date(), -1)),
   endDate: formatDateInput(new Date()),
-  granularity: 'day',
+  granularity: 'hour',
 })
 
 const accountPager = reactive({
@@ -229,6 +236,13 @@ const filteredIDCacheHit = computed(() => filteredAccountIDsCache.has(currentFil
 const batchTestProgress = computed(() => progressPercent(batchTestDone.value, batchTestTotal.value))
 
 const batchRefreshProgress = computed(() => progressPercent(batchRefreshDone.value, batchRefreshTotal.value))
+
+const displayedBatchResults = computed(() => batchTestResults.value.filter((result) => {
+  if (batchResultFilter.value === 'failed') return !isBatchResultPending(result) && result.ok !== true
+  if (batchResultFilter.value === 'success') return result.ok === true
+  if (batchResultFilter.value === 'pending') return isBatchResultPending(result)
+  return true
+}))
 
 const allVisibleSelected = computed(() => visibleAccounts.value.length > 0 && visibleAccounts.value.every((account) => selectedAccountIds.value.has(accountID(account))))
 
@@ -426,6 +440,40 @@ async function loadStatistics() {
     statsError.value = error instanceof Error ? error.message : '加载统计失败'
   } finally {
     statsLoading.value = false
+  }
+}
+
+async function refreshUserConcurrency() {
+  statsError.value = ''
+  if (!activeSiteId.value) {
+    statsError.value = '请先选择站点'
+    return
+  }
+  userConcurrencyLoading.value = true
+  try {
+    const payload = await api<Record<string, unknown>>(`api/sites/${activeSiteId.value}/statistics/user-concurrency`)
+    statistics.value = { ...(statistics.value || {}), ...payload, userConcurrencyError: undefined }
+  } catch (error) {
+    statistics.value = { ...(statistics.value || {}), userConcurrencyError: error instanceof Error ? error.message : '刷新用户并发失败' }
+  } finally {
+    userConcurrencyLoading.value = false
+  }
+}
+
+async function refreshAccountConcurrency() {
+  statsError.value = ''
+  if (!activeSiteId.value) {
+    statsError.value = '请先选择站点'
+    return
+  }
+  accountConcurrencyLoading.value = true
+  try {
+    const payload = await api<Record<string, unknown>>(`api/sites/${activeSiteId.value}/statistics/account-concurrency`)
+    statistics.value = { ...(statistics.value || {}), ...payload, opsConcurrencyError: undefined }
+  } catch (error) {
+    statistics.value = { ...(statistics.value || {}), opsConcurrencyError: error instanceof Error ? error.message : '刷新账号并发失败' }
+  } finally {
+    accountConcurrencyLoading.value = false
   }
 }
 
@@ -822,6 +870,7 @@ async function loadAccounts(options: { force?: boolean } = {}) {
   const cached = accountCache.get(cacheKey)
   if (!options.force && cached && cached.expiresAt > Date.now()) {
     accounts.value = normalizeAccounts(cached.payload)
+    rememberAccountMeta(accounts.value)
     accountPager.total = payloadTotal(cached.payload)
     accountPager.loaded = true
     accountQueryNotice.value = '已使用 8 秒内缓存结果'
@@ -845,6 +894,7 @@ async function loadAccounts(options: { force?: boolean } = {}) {
     if (requestSeq !== accountRequestSeq) return
     accountCache.set(cacheKey, { expiresAt: Date.now() + 8000, payload })
     accounts.value = normalizeAccounts(payload)
+    rememberAccountMeta(accounts.value)
     accountPager.total = payloadTotal(payload)
     accountPager.loaded = true
     accountQueryNotice.value = `查询完成，用时 ${formatDuration(Date.now() - startedAt)}`
@@ -957,6 +1007,23 @@ function accountName(account: Account) {
   return String(account.name || account.email || extra.name || extra.email || account.id || '未命名账号')
 }
 
+function rememberAccountMeta(items: Account[]) {
+  items.forEach((account) => {
+    const id = accountID(account)
+    if (!id) return
+    accountMetaCache.set(id, { name: accountName(account), note: accountNote(account) })
+  })
+}
+
+function accountMetaForIDs(ids: number[]) {
+  const meta: Record<string, { name: string; note: string }> = {}
+  ids.forEach((id) => {
+    const value = accountMetaCache.get(String(id))
+    if (value) meta[String(id)] = value
+  })
+  return meta
+}
+
 function accountID(account: Account) {
   return String(account.id || '')
 }
@@ -996,6 +1063,9 @@ async function selectAllFilteredAccounts() {
     return cachedIDs
   }
   batchCollecting.value = true
+  batchCollectPage.value = 0
+  batchCollectTotalPages.value = 0
+  batchCollectFound.value = 0
   const ids = new Set<string>()
   const pageSize = 100
   let page = 1
@@ -1004,11 +1074,15 @@ async function selectAllFilteredAccounts() {
       const params = buildAccountQuery(page, pageSize)
       const payload = await api<any>(`api/sites/${activeSiteId.value}/accounts?${params.toString()}`)
       const pageAccounts = normalizeAccounts(payload)
+      rememberAccountMeta(pageAccounts)
       pageAccounts.filter(matchesLocalAccountFilters).forEach((account) => {
         const id = accountID(account)
         if (id) ids.add(id)
       })
       const total = payloadTotal(payload)
+      batchCollectPage.value = page
+      batchCollectFound.value = ids.size
+      batchCollectTotalPages.value = total ? Math.ceil(total / pageSize) : 0
       if (!pageAccounts.length) break
       if (total && page * pageSize >= total) break
       if (!total && pageAccounts.length < pageSize) break
@@ -1375,20 +1449,43 @@ async function refreshAccountTokenIDs(ids: number[]) {
   if (!ok) return
   batchRefreshTotal.value = ids.length
   batchRefreshDone.value = 0
+  batchTestResults.value = ids.map((id) => ({ id, pending: true, message: '等待刷新...', ...accountMetaForIDs([id])[String(id)] }))
   batchRefreshing.value = true
+  batchTestJob.value = null
   try {
-    const payload = await api<Record<string, unknown>>(`api/sites/${activeSiteId.value}/accounts/refresh`, {
+    const job = await api<JobRecord>(`api/sites/${activeSiteId.value}/jobs/batch-token-refresh`, {
       method: 'POST',
-      body: JSON.stringify({ ids }),
+      body: JSON.stringify({ ids, accountMeta: accountMetaForIDs(ids) }),
     })
-    batchRefreshResult.value = payload
-    batchRefreshDone.value = Number(payload.success || 0) + Number(payload.failed || 0)
+    await pollBatchRefreshJob(Number(job.id))
     await loadAccounts({ force: true })
+    await loadRecentJobs()
   } catch (error) {
     batchRefreshError.value = error instanceof Error ? error.message : '批量刷新令牌失败'
   } finally {
     batchRefreshing.value = false
   }
+}
+
+async function pollBatchRefreshJob(jobId: number) {
+  while (batchRefreshing.value) {
+    const job = await api<JobRecord>(`api/jobs/${jobId}`)
+    updateBatchRefreshJob(job)
+    if (!['queued', 'running'].includes(String(job.status))) return
+    await waitForBatchPoll()
+  }
+}
+
+function updateBatchRefreshJob(job: JobRecord) {
+  batchTestJob.value = job
+  batchRefreshTotal.value = Number(job.totalCount || batchRefreshTotal.value || 0)
+  batchRefreshDone.value = Number(job.doneCount || 0)
+  const result = job.result as Record<string, unknown> | undefined
+  const items = Array.isArray(result?.items) ? result.items as Record<string, unknown>[] : []
+  if (items.length) batchTestResults.value = items
+  const response = result?.response as Record<string, unknown> | undefined
+  if (response) batchRefreshResult.value = response
+  else if (result && Object.keys(result).length) batchRefreshResult.value = result
 }
 
 async function testAllFilteredAccounts() {
@@ -1411,7 +1508,7 @@ async function testAccountIDs(ids: number[]) {
     batchTestResults.value = ids.map((id) => ({ id, pending: true, message: '等待检测...' }))
     const job = await api<JobRecord>(`api/sites/${activeSiteId.value}/jobs/batch-account-test`, {
       method: 'POST',
-      body: JSON.stringify({ ids, ...batchTestForm }),
+      body: JSON.stringify({ ids, ...batchTestForm, accountMeta: accountMetaForIDs(ids) }),
     })
     await pollBatchTestJob(Number(job.id))
     await loadRecentJobs()
@@ -1438,6 +1535,7 @@ async function openJobResult(job: JobRecord) {
   try {
     const detail = await api<JobRecord>(`api/jobs/${id}`)
     updateBatchTestJob(detail)
+    if (detail.type === 'batch_token_refresh') updateBatchRefreshJob(detail)
     const result = detail.result as Record<string, unknown> | undefined
     const items = Array.isArray(result?.items) ? result.items as Record<string, unknown>[] : []
     batchTestResults.value = items
@@ -1466,16 +1564,20 @@ async function retryFailedBatchJob() {
   const id = Number(batchTestJob.value?.id)
   if (!id) return
   batchTestError.value = ''
-  batchTesting.value = true
+  const isTokenRefresh = batchTestJob.value?.type === 'batch_token_refresh'
+  batchTesting.value = !isTokenRefresh
+  batchRefreshing.value = isTokenRefresh
   try {
     const job = await api<JobRecord>(`api/jobs/${id}/retry-failed`, { method: 'POST', body: '{}' })
-    batchTestResults.value = failedBatchTestIDs.value.map((accountId) => ({ id: accountId, pending: true, message: '等待检测...' }))
-    await pollBatchTestJob(Number(job.id))
+    batchTestResults.value = failedBatchTestIDs.value.map((accountId) => ({ id: accountId, pending: true, message: isTokenRefresh ? '等待刷新...' : '等待检测...', ...accountMetaForIDs([accountId])[String(accountId)] }))
+    if (isTokenRefresh) await pollBatchRefreshJob(Number(job.id))
+    else await pollBatchTestJob(Number(job.id))
     await loadRecentJobs()
   } catch (error) {
     batchTestError.value = error instanceof Error ? error.message : '重试失败项失败'
   } finally {
     batchTesting.value = false
+    batchRefreshing.value = false
   }
 }
 
@@ -1512,7 +1614,30 @@ function jobStatusLabel(status: unknown) {
 
 function jobTypeLabel(type: unknown) {
   if (type === 'batch_account_test') return '批量检测'
+  if (type === 'batch_token_refresh') return '刷新令牌'
   return String(type || '未知')
+}
+
+function taskResultTitle() {
+  if (batchTestJob.value?.type === 'batch_token_refresh') return '刷新令牌结果'
+  return '批量检测结果'
+}
+
+function batchResultFilterLabel() {
+  if (batchResultFilter.value === 'failed') return '失败'
+  if (batchResultFilter.value === 'success') return '成功'
+  if (batchResultFilter.value === 'pending') return '进行中'
+  return '全部'
+}
+
+function batchResultAction(result: Record<string, unknown>) {
+  if (batchTestJob.value?.type === 'batch_token_refresh') return '令牌刷新'
+  return result.model || '未知'
+}
+
+function selectedTaskResultJSON() {
+  if (!batchTestJob.value) return ''
+  return JSON.stringify(batchTestJob.value.result || {}, null, 2)
 }
 
 function waitForBatchPoll() {
@@ -1531,12 +1656,17 @@ function isBatchResultPending(result: Record<string, unknown>) {
 }
 
 function batchResultLabel(result: Record<string, unknown>) {
-  if (isBatchResultPending(result)) return '测试中'
+  if (isBatchResultPending(result)) return batchTestJob.value?.type === 'batch_token_refresh' ? '刷新中' : '测试中'
   return result.ok ? '成功' : '失败'
 }
 
+function batchResultTagClass(result: Record<string, unknown>) {
+  if (isBatchResultPending(result)) return 'tag tag-warning'
+  return result.ok ? 'tag tag-success' : 'tag tag-danger'
+}
+
 function batchResultHint(result: Record<string, unknown>) {
-  if (isBatchResultPending(result)) return '测试中'
+  if (isBatchResultPending(result)) return batchTestJob.value?.type === 'batch_token_refresh' ? '刷新中' : '测试中'
   if (result.ok === true && !result.hint && !result.resetAt) return '正常'
   if (result.ok === false && !result.hint && !result.resetAt) return '异常'
   return result.hint || result.resetAt || '异常'
@@ -1546,6 +1676,14 @@ function batchResultSummary(result: Record<string, unknown>) {
   const text = String(result.message || result.error || result.hint || '')
   if (!text) return '无响应内容'
   return text.length > 36 ? `${text.slice(0, 36)}...` : text
+}
+
+function resultAccountName(result: Record<string, unknown>) {
+  return String(result.name || accountMetaCache.get(String(result.id || ''))?.name || '未知账号')
+}
+
+function resultAccountNote(result: Record<string, unknown>) {
+  return String(result.note || accountMetaCache.get(String(result.id || ''))?.note || '')
 }
 
 function batchResultDetailJSON(result: Record<string, unknown>) {
@@ -1752,7 +1890,12 @@ onUnmounted(() => {
             <p v-else class="muted">暂无趋势数据。</p>
           </ExpandablePanel>
           <ExpandablePanel title="当前用户并发" panel-class="stats-section-user-concurrency">
-            <template #meta><span class="muted" title="来自 /api/v1/admin/ops/user-concurrency。">{{ userConcurrencySummary.current }} 使用中 · {{ userConcurrencySummary.waiting }} 排队</span></template>
+            <template #meta>
+              <span class="muted concurrency-meta" title="来自 /api/v1/admin/ops/user-concurrency。">
+                <span>{{ userConcurrencySummary.current }} 使用中 · {{ userConcurrencySummary.waiting }} 排队</span>
+                <button type="button" class="mini inline-refresh" :disabled="userConcurrencyLoading || !activeSiteId" @click.stop="refreshUserConcurrency">{{ userConcurrencyLoading ? '刷新中...' : '刷新' }}</button>
+              </span>
+            </template>
             <p v-if="userConcurrency.enabled === false" class="muted">sub2api Ops 实时监控未开启，无法获取用户并发。</p>
             <p v-else-if="statistics?.userConcurrencyError" class="error">{{ statistics.userConcurrencyError }}</p>
             <ConcurrencyTable
@@ -1769,7 +1912,12 @@ onUnmounted(() => {
             />
           </ExpandablePanel>
           <ExpandablePanel title="当前账号并发" panel-class="stats-section-account-concurrency">
-            <template #meta><span class="muted">{{ accountConcurrencySummary.current }} 使用中 · {{ accountConcurrencySummary.waiting }} 排队</span></template>
+            <template #meta>
+              <span class="muted concurrency-meta" title="来自 /api/v1/admin/ops/concurrency。">
+                <span>{{ accountConcurrencySummary.current }} 使用中 · {{ accountConcurrencySummary.waiting }} 排队</span>
+                <button type="button" class="mini inline-refresh" :disabled="accountConcurrencyLoading || !activeSiteId" @click.stop="refreshAccountConcurrency">{{ accountConcurrencyLoading ? '刷新中...' : '刷新' }}</button>
+              </span>
+            </template>
             <p v-if="opsConcurrency.enabled === false" class="muted">sub2api Ops 实时监控未开启，无法获取账号并发。</p>
             <p v-else-if="statistics?.opsConcurrencyError" class="error">{{ statistics.opsConcurrencyError }}</p>
             <ConcurrencyTable
@@ -1841,7 +1989,7 @@ onUnmounted(() => {
         <div class="panel-head">
           <div>
             <h2>任务</h2>
-            <p class="muted">统一查看批量任务历史、进度、结果和失败重试。当前已接入批量账号检测。</p>
+            <p class="muted">统一查看批量任务历史、进度、结果和失败重试。当前已接入批量账号检测和令牌刷新。</p>
           </div>
           <button class="secondary" :disabled="jobsLoading" @click="loadRecentJobs">{{ jobsLoading ? '加载中...' : '刷新任务' }}</button>
         </div>
@@ -1850,7 +1998,7 @@ onUnmounted(() => {
           <div class="panel-head">
             <div>
               <h2>最近任务</h2>
-              <p class="muted">展示最近 10 个任务；点击查看结果可恢复批量检测明细。</p>
+                <p class="muted">展示最近 10 个任务；点击查看结果可恢复批量检测或令牌刷新明细。</p>
             </div>
           </div>
           <div class="result-scroll table-wrap jobs-scroll">
@@ -1882,7 +2030,7 @@ onUnmounted(() => {
         <section v-if="batchTestResults.length" class="batch-results result-panel">
           <div class="panel-head">
             <div>
-              <h2>任务结果</h2>
+              <h2>{{ taskResultTitle() }}</h2>
               <p class="muted"><span v-if="batchTestJob">任务 #{{ batchTestJob.id }} · {{ jobStatusLabel(batchTestJob.status) }} · </span>{{ batchTestDone }} / {{ batchTestTotal || batchTestResults.length }} 完成</p>
             </div>
             <div class="actions compact-actions">
@@ -1891,15 +2039,22 @@ onUnmounted(() => {
               <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="retryFailedBatchTests">只重试失败项</button>
             </div>
           </div>
+          <div class="active-filter-chips">
+            <span class="muted">结果筛选：{{ batchResultFilterLabel() }}</span>
+            <button type="button" class="filter-chip" :class="{ active: batchResultFilter === 'all' }" @click="batchResultFilter = 'all'">全部 {{ batchTestResults.length }}</button>
+            <button type="button" class="filter-chip" :class="{ active: batchResultFilter === 'failed' }" @click="batchResultFilter = 'failed'">失败 {{ failedBatchTestIDs.length }}</button>
+            <button type="button" class="filter-chip" :class="{ active: batchResultFilter === 'success' }" @click="batchResultFilter = 'success'">成功 {{ batchTestResults.filter((item) => item.ok === true).length }}</button>
+            <button type="button" class="filter-chip" :class="{ active: batchResultFilter === 'pending' }" @click="batchResultFilter = 'pending'">进行中 {{ batchTestResults.filter(isBatchResultPending).length }}</button>
+          </div>
           <div class="progress-track"><div class="progress-bar" :style="{ width: `${batchTestProgress}%` }"></div></div>
           <div ref="batchTestScroll" class="result-scroll table-wrap">
             <table class="account-table result-table">
-              <thead><tr><th>账号 ID</th><th>结果</th><th>模型</th><th>HTTP</th><th>耗时</th><th>提示</th><th>详情</th></tr></thead>
+              <thead><tr><th>账号</th><th>结果</th><th>操作</th><th>HTTP</th><th>耗时</th><th>提示</th><th>详情</th></tr></thead>
               <tbody>
-                <tr v-for="result in batchTestResults" :key="String(result.id)">
-                  <td>{{ result.id }}</td>
-                  <td>{{ batchResultLabel(result) }}</td>
-                  <td>{{ result.model || '未知' }}</td>
+                <tr v-for="result in displayedBatchResults" :key="String(result.id)">
+                  <td><div class="cell-stack"><span class="muted cell-subtitle">{{ result.id }}</span><strong class="account-name">{{ resultAccountName(result) }}</strong><span v-if="resultAccountNote(result)" class="muted account-note">{{ resultAccountNote(result) }}</span></div></td>
+                  <td><span :class="batchResultTagClass(result)">{{ batchResultLabel(result) }}</span></td>
+                  <td>{{ batchResultAction(result) }}</td>
                   <td>{{ result.statusCode || '未知' }}</td>
                   <td>{{ result.durationMs ?? '未知' }} ms</td>
                   <td>{{ batchResultHint(result) }}</td>
@@ -1908,6 +2063,16 @@ onUnmounted(() => {
               </tbody>
             </table>
           </div>
+        </section>
+        <section v-else-if="batchTestJob" class="batch-results result-panel">
+          <div class="panel-head">
+            <div>
+              <h2>任务结果</h2>
+              <p class="muted">任务 #{{ batchTestJob.id }} · {{ jobTypeLabel(batchTestJob.type) }} · {{ jobStatusLabel(batchTestJob.status) }} · {{ batchTestJob.doneCount || 0 }} / {{ batchTestJob.totalCount || 0 }} 完成</p>
+            </div>
+            <button class="secondary" @click="copyText(selectedTaskResultJSON(), '任务结果')">复制结果</button>
+          </div>
+          <pre class="inline-json result-json">{{ selectedTaskResultJSON() }}</pre>
         </section>
       </section>
 
@@ -2132,6 +2297,7 @@ onUnmounted(() => {
             </div>
           </details>
           <p v-if="batchCollecting" class="muted">正在按当前筛选条件分页收集账号 ID...</p>
+          <p v-if="batchCollecting" class="muted">已扫描第 {{ batchCollectPage }} 页<span v-if="batchCollectTotalPages"> / 约 {{ batchCollectTotalPages }} 页</span>，已收集 {{ batchCollectFound }} 个账号 ID。</p>
           <p v-if="batchTesting" class="muted">正在执行批量检测任务；每个账号完成后会更新一行结果。大批量会自动提高最小间隔。</p>
           <p v-if="batchTestJob" class="muted">任务 #{{ batchTestJob.id }} · {{ jobStatusLabel(batchTestJob.status) }} · {{ batchTestDone }} / {{ batchTestTotal }} 完成 <button type="button" class="mini" @click="showJobs">查看任务</button></p>
           <p v-if="batchRefreshing" class="muted">正在刷新账号 OAuth 令牌；sub2api 批量刷新接口会修改上游账号凭证。</p>
@@ -2141,7 +2307,7 @@ onUnmounted(() => {
           <section v-if="batchTestResults.length" class="batch-results result-panel">
             <div class="panel-head">
               <div>
-                <h2>批量检测结果</h2>
+                <h2>{{ taskResultTitle() }}</h2>
                 <p class="muted">{{ batchTestDone }} / {{ batchTestTotal || batchTestResults.length }} 完成</p>
               </div>
               <div class="actions compact-actions">
@@ -2151,6 +2317,13 @@ onUnmounted(() => {
                 <button class="secondary" :disabled="!failedBatchTestIDs.length || batchTesting" @click="retryFailedBatchTests">只重试失败项</button>
               </div>
             </div>
+            <div class="active-filter-chips">
+              <span class="muted">结果筛选：{{ batchResultFilterLabel() }}</span>
+              <button type="button" class="filter-chip" :class="{ active: batchResultFilter === 'all' }" @click="batchResultFilter = 'all'">全部 {{ batchTestResults.length }}</button>
+              <button type="button" class="filter-chip" :class="{ active: batchResultFilter === 'failed' }" @click="batchResultFilter = 'failed'">失败 {{ failedBatchTestIDs.length }}</button>
+              <button type="button" class="filter-chip" :class="{ active: batchResultFilter === 'success' }" @click="batchResultFilter = 'success'">成功 {{ batchTestResults.filter((item) => item.ok === true).length }}</button>
+              <button type="button" class="filter-chip" :class="{ active: batchResultFilter === 'pending' }" @click="batchResultFilter = 'pending'">进行中 {{ batchTestResults.filter(isBatchResultPending).length }}</button>
+            </div>
             <div class="progress-track"><div class="progress-bar" :style="{ width: `${batchTestProgress}%` }"></div></div>
             <div v-if="batchTestFailureGroups.length" class="failure-groups">
               <span class="muted">失败分类</span>
@@ -2158,12 +2331,12 @@ onUnmounted(() => {
             </div>
             <div ref="batchTestScroll" class="result-scroll table-wrap">
               <table class="account-table result-table">
-                <thead><tr><th>账号 ID</th><th>结果</th><th>模型</th><th>HTTP</th><th>耗时</th><th>提示</th><th>详情</th></tr></thead>
+                <thead><tr><th>账号</th><th>结果</th><th>操作</th><th>HTTP</th><th>耗时</th><th>提示</th><th>详情</th></tr></thead>
                 <tbody>
-                  <tr v-for="result in batchTestResults" :key="String(result.id)">
-                    <td>{{ result.id }}</td>
-                    <td>{{ batchResultLabel(result) }}</td>
-                    <td>{{ result.model || '未知' }}</td>
+                  <tr v-for="result in displayedBatchResults" :key="String(result.id)">
+                    <td><div class="cell-stack"><span class="muted cell-subtitle">{{ result.id }}</span><strong class="account-name">{{ resultAccountName(result) }}</strong><span v-if="resultAccountNote(result)" class="muted account-note">{{ resultAccountNote(result) }}</span></div></td>
+                    <td><span :class="batchResultTagClass(result)">{{ batchResultLabel(result) }}</span></td>
+                    <td>{{ batchResultAction(result) }}</td>
                     <td>{{ result.statusCode || '未知' }}</td>
                     <td>{{ result.durationMs ?? '未知' }} ms</td>
                     <td>{{ batchResultHint(result) }}</td>
@@ -2432,7 +2605,7 @@ onUnmounted(() => {
           <section class="detail-section">
             <h3>结果</h3>
             <div class="detail-grid">
-              <span>状态</span><strong>{{ batchResultLabel(selectedBatchTestResult) }}</strong>
+              <span>状态</span><strong><span :class="batchResultTagClass(selectedBatchTestResult)">{{ batchResultLabel(selectedBatchTestResult) }}</span></strong>
               <span>提示</span><strong>{{ batchResultHint(selectedBatchTestResult) }}</strong>
               <span>模型</span><strong>{{ selectedBatchTestResult.model || '未知' }}</strong>
               <span>HTTP</span><strong>{{ selectedBatchTestResult.statusCode || '未知' }}</strong>
@@ -2487,6 +2660,8 @@ onUnmounted(() => {
 .stats-panel { display: grid; gap: 14px; }
 .stats-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, auto)); gap: 10px; align-items: end; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 16px; background: rgba(2, 6, 23, 0.22); }
 .stats-controls label { min-width: 150px; }
+.concurrency-meta { display: flex !important; flex-wrap: wrap; gap: 8px; align-items: center; }
+.inline-refresh { margin-left: 0; }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 .stat-panel-card { padding: 14px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 16px; background: rgba(2, 6, 23, 0.24); }
 .stat-panel-card.wide-card { grid-column: span 2; }

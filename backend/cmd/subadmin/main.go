@@ -210,6 +210,14 @@ func main() {
 			writeCreateBatchAccountTestJob(w, r, jobService, id)
 			return
 		}
+		if action == "jobs/batch-token-refresh" {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeCreateBatchTokenRefreshJob(w, r, jobService, id)
+			return
+		}
 		if action == "groups" {
 			if r.Method != http.MethodGet {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -231,6 +239,22 @@ func main() {
 				return
 			}
 			writeSiteStatistics(w, r, siteService, id)
+			return
+		}
+		if action == "statistics/user-concurrency" {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeSiteUserConcurrency(w, r, siteService, id)
+			return
+		}
+		if action == "statistics/account-concurrency" {
+			if r.Method != http.MethodGet {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeSiteAccountConcurrency(w, r, siteService, id)
 			return
 		}
 		if action != "" {
@@ -400,13 +424,24 @@ func writeSiteError(w http.ResponseWriter, err error) {
 }
 
 type batchAccountTestInput struct {
-	IDs          []int64 `json:"ids"`
-	ModelID      string  `json:"modelId"`
-	Prompt       string  `json:"prompt"`
-	Mode         string  `json:"mode"`
-	DelayMs      int     `json:"delayMs"`
-	JitterMs     int     `json:"jitterMs"`
-	LogResponses bool    `json:"logResponses"`
+	IDs          []int64                `json:"ids"`
+	ModelID      string                 `json:"modelId"`
+	Prompt       string                 `json:"prompt"`
+	Mode         string                 `json:"mode"`
+	DelayMs      int                    `json:"delayMs"`
+	JitterMs     int                    `json:"jitterMs"`
+	LogResponses bool                   `json:"logResponses"`
+	AccountMeta  map[string]accountMeta `json:"accountMeta,omitempty"`
+}
+
+type batchTokenRefreshInput struct {
+	IDs         []int64                `json:"ids"`
+	AccountMeta map[string]accountMeta `json:"accountMeta,omitempty"`
+}
+
+type accountMeta struct {
+	Name string `json:"name,omitempty"`
+	Note string `json:"note,omitempty"`
 }
 
 type jobManager struct {
@@ -557,6 +592,24 @@ func writeCreateBatchAccountTestJob(w http.ResponseWriter, r *http.Request, mana
 	writeJSON(w, http.StatusCreated, job)
 }
 
+func writeCreateBatchTokenRefreshJob(w http.ResponseWriter, r *http.Request, manager *jobManager, siteID int64) {
+	if manager == nil {
+		writeError(w, http.StatusServiceUnavailable, "SUBADMIN_SECRET_KEY is required for jobs")
+		return
+	}
+	var input batchTokenRefreshInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	job, err := manager.createBatchTokenRefresh(r.Context(), siteID, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, job)
+}
+
 func (m *jobManager) createBatchAccountTest(ctx context.Context, siteID int64, input batchAccountTestInput) (*jobRecord, error) {
 	ids := cleanAccountIDs(input.IDs)
 	if len(ids) == 0 {
@@ -566,6 +619,7 @@ func (m *jobManager) createBatchAccountTest(ctx context.Context, siteID int64, i
 	input.ModelID = strings.TrimSpace(input.ModelID)
 	input.Prompt = strings.TrimSpace(input.Prompt)
 	input.Mode = strings.TrimSpace(input.Mode)
+	input.AccountMeta = cleanAccountMeta(input.AccountMeta)
 	if input.DelayMs < 0 {
 		input.DelayMs = 0
 	}
@@ -592,6 +646,33 @@ VALUES (?, 'batch_account_test', 'queued', ?, 0, 0, 0, ?, '{"items":[]}', ?)
 	return m.get(ctx, id)
 }
 
+func (m *jobManager) createBatchTokenRefresh(ctx context.Context, siteID int64, input batchTokenRefreshInput) (*jobRecord, error) {
+	ids := cleanAccountIDs(input.IDs)
+	if len(ids) == 0 {
+		return nil, errors.New("ids is required")
+	}
+	input.IDs = ids
+	input.AccountMeta = cleanAccountMeta(input.AccountMeta)
+	inputJSON, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	res, err := m.db.ExecContext(ctx, `
+INSERT INTO jobs (site_id, type, status, total_count, done_count, success_count, failed_count, input_json, result_json, created_at)
+VALUES (?, 'batch_token_refresh', 'queued', ?, 0, 0, 0, ?, '{}', ?)
+`, siteID, len(ids), string(inputJSON), now)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	m.startBatchTokenRefresh(id, siteID, input)
+	return m.get(ctx, id)
+}
+
 func (m *jobManager) startBatchAccountTest(jobID, siteID int64, input batchAccountTestInput) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()
@@ -604,6 +685,21 @@ func (m *jobManager) startBatchAccountTest(jobID, siteID int64, input batchAccou
 			m.mu.Unlock()
 		}()
 		m.runBatchAccountTest(ctx, jobID, siteID, input)
+	}()
+}
+
+func (m *jobManager) startBatchTokenRefresh(jobID, siteID int64, input batchTokenRefreshInput) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.mu.Lock()
+	m.cancels[jobID] = cancel
+	m.mu.Unlock()
+	go func() {
+		defer func() {
+			m.mu.Lock()
+			delete(m.cancels, jobID)
+			m.mu.Unlock()
+		}()
+		m.runBatchTokenRefresh(ctx, jobID, siteID, input)
 	}()
 }
 
@@ -623,6 +719,7 @@ func (m *jobManager) runBatchAccountTest(ctx context.Context, jobID, siteID int6
 			return
 		}
 		result := runAccountTest(ctx, m.siteService, m.logDir, siteID, accountID, input)
+		applyAccountMeta(result, input.AccountMeta)
 		if result["ok"] == true {
 			successCount++
 		} else {
@@ -636,6 +733,133 @@ func (m *jobManager) runBatchAccountTest(ctx context.Context, jobID, siteID int6
 		status = "failed"
 	}
 	_ = m.finishJob(jobID, status, items, successCount, failedCount, "")
+}
+
+func (m *jobManager) runBatchTokenRefresh(ctx context.Context, jobID, siteID int64, input batchTokenRefreshInput) {
+	now := time.Now().Unix()
+	_, _ = m.db.ExecContext(context.Background(), `UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?`, now, jobID)
+	if ctx.Err() != nil {
+		_ = m.finishJob(jobID, "cancelled", nil, 0, 0, ctx.Err().Error())
+		return
+	}
+	started := time.Now()
+	data, statusCode, err := m.siteService.AdminPOSTJSON(ctx, siteID, "/api/v1/admin/accounts/batch-refresh", map[string]any{
+		"account_ids": input.IDs,
+	})
+	durationMS := time.Since(started).Milliseconds()
+	items := buildTokenRefreshItems(input.IDs, input.AccountMeta, statusCode, durationMS, data, err)
+	successCount, failedCount := countJobItems(items)
+	_ = m.updateJobProgress(jobID, items, successCount, failedCount)
+	status := "succeeded"
+	if failedCount > 0 {
+		status = "failed"
+	}
+	_ = m.finishJob(jobID, status, items, successCount, failedCount, "")
+}
+
+func buildTokenRefreshItems(ids []int64, meta map[string]accountMeta, statusCode int, durationMS int64, data []byte, err error) []map[string]any {
+	items := make([]map[string]any, 0, len(ids))
+	if err != nil {
+		for _, id := range ids {
+			item := map[string]any{"id": id, "ok": false, "statusCode": statusCode, "durationMs": durationMS, "hint": "刷新失败", "error": err.Error()}
+			applyAccountMeta(item, meta)
+			items = append(items, item)
+		}
+		return items
+	}
+	response := decodeJSONValue(sanitizeJSONForBrowser(data))
+	dataMap := unwrapResponseMap(response)
+	errorsByID := issueTextByAccountID(dataMap["errors"], "error")
+	warningsByID := issueTextByAccountID(dataMap["warnings"], "warning")
+	for _, id := range ids {
+		item := map[string]any{"id": id, "statusCode": statusCode, "durationMs": durationMS}
+		applyAccountMeta(item, meta)
+		key := strconv.FormatInt(id, 10)
+		if message := errorsByID[key]; message != "" || statusCode < 200 || statusCode >= 300 {
+			item["ok"] = false
+			item["hint"] = "刷新失败"
+			if message != "" {
+				item["error"] = message
+			} else {
+				item["error"] = fmt.Sprintf("HTTP %d", statusCode)
+			}
+		} else {
+			item["ok"] = true
+			item["hint"] = "刷新成功"
+			if warning := warningsByID[key]; warning != "" {
+				item["warning"] = warning
+				item["message"] = warning
+			}
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func unwrapResponseMap(value any) map[string]any {
+	root, _ := value.(map[string]any)
+	if data, ok := root["data"].(map[string]any); ok {
+		return data
+	}
+	return root
+}
+
+func issueTextByAccountID(value any, field string) map[string]string {
+	result := map[string]string{}
+	items, ok := value.([]any)
+	if !ok {
+		return result
+	}
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := int64FromAny(item["account_id"])
+		if id <= 0 {
+			id = int64FromAny(item["id"])
+		}
+		if id <= 0 {
+			continue
+		}
+		text := strings.TrimSpace(fmt.Sprint(item[field]))
+		if text == "<nil>" || text == "" {
+			text = strings.TrimSpace(fmt.Sprint(item["message"]))
+		}
+		if text != "" && text != "<nil>" {
+			result[strconv.FormatInt(id, 10)] = text
+		}
+	}
+	return result
+}
+
+func int64FromAny(value any) int64 {
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed)
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case string:
+		parsed, _ := strconv.ParseInt(typed, 10, 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func countJobItems(items []map[string]any) (int, int) {
+	successCount := 0
+	failedCount := 0
+	for _, item := range items {
+		if item["ok"] == true {
+			successCount++
+		} else {
+			failedCount++
+		}
+	}
+	return successCount, failedCount
 }
 
 func waitForJobDelay(ctx context.Context, totalCount, delayMs, jitterMs int) bool {
@@ -764,12 +988,8 @@ func (m *jobManager) retryFailed(ctx context.Context, id int64) (*jobRecord, err
 	if err != nil {
 		return nil, err
 	}
-	if job.Type != "batch_account_test" {
+	if job.Type != "batch_account_test" && job.Type != "batch_token_refresh" {
 		return nil, errors.New("job type cannot be retried")
-	}
-	var input batchAccountTestInput
-	if err := json.Unmarshal(job.Input, &input); err != nil {
-		return nil, err
 	}
 	failedIDs := failedIDsFromJobResult(job.Result)
 	if len(failedIDs) == 0 {
@@ -777,6 +997,18 @@ func (m *jobManager) retryFailed(ctx context.Context, id int64) (*jobRecord, err
 	}
 	if job.SiteID == nil {
 		return nil, errors.New("job has no site")
+	}
+	if job.Type == "batch_token_refresh" {
+		var input batchTokenRefreshInput
+		if err := json.Unmarshal(job.Input, &input); err != nil {
+			return nil, err
+		}
+		input.IDs = failedIDs
+		return m.createBatchTokenRefresh(ctx, *job.SiteID, input)
+	}
+	var input batchAccountTestInput
+	if err := json.Unmarshal(job.Input, &input); err != nil {
+		return nil, err
 	}
 	input.IDs = failedIDs
 	return m.createBatchAccountTest(ctx, *job.SiteID, input)
@@ -852,6 +1084,49 @@ func cleanAccountIDs(ids []int64) []int64 {
 	return result
 }
 
+func cleanAccountMeta(meta map[string]accountMeta) map[string]accountMeta {
+	if len(meta) == 0 {
+		return nil
+	}
+	cleaned := map[string]accountMeta{}
+	for key, value := range meta {
+		id := strings.TrimSpace(key)
+		if id == "" {
+			continue
+		}
+		name := strings.TrimSpace(value.Name)
+		note := strings.TrimSpace(value.Note)
+		if name == "" && note == "" {
+			continue
+		}
+		cleaned[id] = accountMeta{Name: name, Note: note}
+	}
+	if len(cleaned) == 0 {
+		return nil
+	}
+	return cleaned
+}
+
+func applyAccountMeta(result map[string]any, meta map[string]accountMeta) {
+	if len(meta) == 0 {
+		return
+	}
+	id := strings.TrimSpace(fmt.Sprint(result["id"]))
+	if id == "" {
+		return
+	}
+	value, ok := meta[id]
+	if !ok {
+		return
+	}
+	if value.Name != "" {
+		result["name"] = value.Name
+	}
+	if value.Note != "" {
+		result["note"] = value.Note
+	}
+}
+
 func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64, logDir string) {
 	var input batchAccountTestInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -865,7 +1140,9 @@ func writeBatchAccountTest(w http.ResponseWriter, r *http.Request, siteService *
 	}
 	results := make([]map[string]any, 0, len(input.IDs))
 	for _, accountID := range input.IDs {
-		results = append(results, runAccountTest(r.Context(), siteService, logDir, siteID, accountID, input))
+		result := runAccountTest(r.Context(), siteService, logDir, siteID, accountID, input)
+		applyAccountMeta(result, input.AccountMeta)
+		results = append(results, result)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": results})
 }
@@ -960,12 +1237,14 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 	endDate := strings.TrimSpace(requestQuery.Get("end_date"))
 	granularity := strings.TrimSpace(requestQuery.Get("granularity"))
 	if startDate == "" {
-		startDate = now.AddDate(0, 0, -7).Format("2006-01-02")
+		startDate = now.AddDate(0, 0, -1).Format("2006-01-02")
 	}
 	if endDate == "" {
 		endDate = now.Format("2006-01-02")
 	}
-	if granularity != "hour" {
+	if granularity == "" {
+		granularity = "hour"
+	} else if granularity != "hour" {
 		granularity = "day"
 	}
 	query.Set("start_date", startDate)
@@ -1031,6 +1310,30 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 		result["opsConcurrencyError"] = opsConcurrencyErr.Error()
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func writeSiteUserConcurrency(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
+	data, statusCode, err := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/ops/user-concurrency", nil)
+	if err != nil {
+		writeSiteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"userConcurrency":       decodeJSONValue(data),
+		"userConcurrencyStatus": statusCode,
+	})
+}
+
+func writeSiteAccountConcurrency(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
+	data, statusCode, err := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/ops/concurrency", nil)
+	if err != nil {
+		writeSiteError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"opsConcurrency":       decodeJSONValue(data),
+		"opsConcurrencyStatus": statusCode,
+	})
 }
 
 func decodeJSONValue(data []byte) any {
