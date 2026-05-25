@@ -1965,7 +1965,7 @@ func applyImportPreviewSettings(item *importPreviewItem, settings map[string]any
 	if item == nil || len(settings) == 0 {
 		return
 	}
-	namePrefix := strings.TrimSpace(fmt.Sprint(settings["namePrefix"]))
+	namePrefix := renderImportNamePrefix(strings.TrimSpace(fmt.Sprint(settings["namePrefix"])), time.Now())
 	if namePrefix != "" && item.Name != "" && !strings.HasPrefix(item.Name, namePrefix) {
 		item.Name = namePrefix + item.Name
 	}
@@ -2266,8 +2266,9 @@ func buildImportAccounts(text string, settings importAccountSettings) ([]importA
 		if name == "" {
 			name = fmt.Sprintf("导入账号 #%d", index+1)
 		}
-		if settings.NamePrefix != "" && !strings.HasPrefix(name, settings.NamePrefix) {
-			name = settings.NamePrefix + name
+		namePrefix := renderImportNamePrefix(settings.NamePrefix, time.Now())
+		if namePrefix != "" && !strings.HasPrefix(name, namePrefix) {
+			name = namePrefix + name
 		}
 		accounts = append(accounts, importAccountExecution{
 			Index:       index + 1,
@@ -2377,6 +2378,13 @@ func cleanImportAccountSettings(settings importAccountSettings) importAccountSet
 		settings.Concurrency = &value
 	}
 	return settings
+}
+
+func renderImportNamePrefix(prefix string, now time.Time) string {
+	if prefix == "" {
+		return ""
+	}
+	return strings.ReplaceAll(prefix, "{date}", now.Format("20060102"))
 }
 
 func safeImportExecutionSettings(settings importAccountSettings) map[string]any {

@@ -2444,7 +2444,7 @@ onUnmounted(() => {
             </label>
             <label>优先级<input v-model="importForm.priority" type="number" placeholder="可选" /></label>
             <label>并发<input v-model="importForm.concurrency" type="number" placeholder="可选" /></label>
-            <label>命名前缀<input v-model="importForm.namePrefix" placeholder="可选" /></label>
+            <label>命名前缀<input v-model="importForm.namePrefix" placeholder="可选，支持 {date}，如 import-{date}-" /></label>
           </div>
           <div class="section-card compact-section import-setting-card">
             <h3>分组 <button type="button" class="mini inline-refresh" :disabled="groupsLoading" @click="loadGroups">{{ groupsLoading ? '刷新中...' : '刷新分组' }}</button></h3>

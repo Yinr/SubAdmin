@@ -73,6 +73,7 @@ Current scope:
 - Parse input server-side only.
 - Return recognized accounts, platform/type, display name, group hints, missing required fields, duplicate risks, and validation warnings.
 - Allow import settings such as existing groups, existing proxy, priority, concurrency, naming rules, and model list.
+- Render `{date}` in import name prefixes as `YYYYMMDD` during preview and execution.
 - Execute confirmed imports through sub2api's batch account creation endpoint.
 - Store selected models in `credentials.model_mapping` using identity mapping.
 - Store no upstream credentials in browser storage.
