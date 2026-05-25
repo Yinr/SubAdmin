@@ -276,12 +276,10 @@ const importGroupOptions = computed(() => {
 })
 
 const pagedImportPreviewItems = computed(() => {
-  const items = importPreview.value?.items || []
-  const start = (importPreviewPage.value - 1) * importPreviewPageSize
-  return items.slice(start, start + importPreviewPageSize)
+  return importPreview.value?.items || []
 })
 
-const importPreviewTotalPages = computed(() => Math.max(1, Math.ceil((importPreview.value?.items.length || 0) / importPreviewPageSize)))
+const importPreviewTotalPages = computed(() => Math.max(1, Math.ceil(Number(importPreview.value?.summary?.total || 0) / importPreviewPageSize)))
 
 const selectedAccountCount = computed(() => selectedAccountIds.value.size)
 
@@ -1180,7 +1178,7 @@ function removeImportModelTag(model: string) {
   importForm.models = importForm.models.filter((item) => item !== model)
 }
 
-async function previewImport() {
+async function previewImport(page = 1) {
   importError.value = ''
   importPreview.value = null
   if (!activeSiteId.value) {
@@ -1199,9 +1197,11 @@ async function previewImport() {
         text: importForm.text,
         filename: importForm.filename,
         settings: importPreviewSettings(),
+        limit: importPreviewPageSize,
+        offset: (page - 1) * importPreviewPageSize,
       }),
     })
-    importPreviewPage.value = 1
+    importPreviewPage.value = page
   } catch (error) {
     importError.value = error instanceof Error ? error.message : '生成导入预览失败'
   } finally {
@@ -2405,7 +2405,7 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="form-actions">
-            <button type="button" :disabled="importLoading || !activeSiteId" @click="previewImport">{{ importLoading ? '解析中...' : '生成预览' }}</button>
+            <button type="button" :disabled="importLoading || !activeSiteId" @click="previewImport(1)">{{ importLoading ? '解析中...' : '生成预览' }}</button>
             <span class="muted">当前站点：{{ activeSite?.name || '未选择' }}<template v-if="importForm.filename"> · 文件：{{ importForm.filename }}</template></span>
           </div>
         </div>
@@ -2457,9 +2457,9 @@ onUnmounted(() => {
             </table>
           </div>
           <div class="pager" v-if="importPreview.items.length > importPreviewPageSize">
-            <button class="secondary" :disabled="importPreviewPage <= 1" @click="importPreviewPage -= 1">上一页</button>
+            <button class="secondary" :disabled="importPreviewPage <= 1 || importLoading" @click="previewImport(importPreviewPage - 1)">上一页</button>
             <span class="muted">第 {{ importPreviewPage }} / {{ importPreviewTotalPages }} 页，默认每页 {{ importPreviewPageSize }} 条</span>
-            <button class="secondary" :disabled="importPreviewPage >= importPreviewTotalPages" @click="importPreviewPage += 1">下一页</button>
+            <button class="secondary" :disabled="importPreviewPage >= importPreviewTotalPages || importLoading" @click="previewImport(importPreviewPage + 1)">下一页</button>
           </div>
         </section>
       </section>

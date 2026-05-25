@@ -1457,6 +1457,8 @@ type importPreviewInput struct {
 	Text     string         `json:"text"`
 	Filename string         `json:"filename"`
 	Settings map[string]any `json:"settings"`
+	Limit    int            `json:"limit"`
+	Offset   int            `json:"offset"`
 }
 
 type importTemplateRecord struct {
@@ -1621,20 +1623,26 @@ func writeImportPreview(w http.ResponseWriter, r *http.Request, database *sql.DB
 	settings := sanitizeImportSettings(input.Settings)
 	items, warnings := parseImportPreview(input.Text, settings)
 	markImportDuplicates(items)
+	pageItems := paginateImportItems(items, input.Offset, input.Limit)
 	summary := map[string]any{
 		"total":      len(items),
 		"recognized": countImportItems(items, func(item importPreviewItem) bool { return item.Recognized }),
 		"invalid":    countImportItems(items, func(item importPreviewItem) bool { return !item.Recognized }),
 		"duplicates": countImportItems(items, func(item importPreviewItem) bool { return item.DuplicateKey != "" }),
 	}
-	slog.InfoContext(r.Context(), "import preview generated", "site_id", siteID, "filename", input.Filename, "total", summary["total"], "recognized", summary["recognized"], "invalid", summary["invalid"], "duplicates", summary["duplicates"])
+	slog.InfoContext(r.Context(), "import preview generated", "site_id", siteID, "filename", input.Filename, "total", summary["total"], "returned", len(pageItems), "offset", input.Offset, "limit", input.Limit, "recognized", summary["recognized"], "invalid", summary["invalid"], "duplicates", summary["duplicates"])
 	writeAuditLog(database, r, &siteID, "import.preview", "account", len(items), map[string]any{"filename": input.Filename, "settings": settings}, map[string]any{"summary": summary})
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items":    items,
+		"items":    pageItems,
 		"warnings": warnings,
 		"errors":   []string{},
 		"summary":  summary,
 		"settings": settings,
+		"page": map[string]any{
+			"offset": input.Offset,
+			"limit":  input.Limit,
+			"count":  len(pageItems),
+		},
 	})
 }
 
@@ -1670,6 +1678,7 @@ func decodeImportPreviewInput(r *http.Request) (importPreviewInput, error) {
 		if strings.TrimSpace(input.Text) == "" {
 			return importPreviewInput{}, errors.New("text or file is required")
 		}
+		input.Limit = 10
 		return input, nil
 	}
 	var input importPreviewInput
@@ -1684,7 +1693,30 @@ func decodeImportPreviewInput(r *http.Request) (importPreviewInput, error) {
 	if len(input.Text) > maxBodyBytes {
 		return importPreviewInput{}, errors.New("import preview input is too large")
 	}
+	if input.Limit <= 0 || input.Limit > 100 {
+		input.Limit = 10
+	}
+	if input.Offset < 0 {
+		input.Offset = 0
+	}
 	return input, nil
+}
+
+func paginateImportItems(items []importPreviewItem, offset, limit int) []importPreviewItem {
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []importPreviewItem{}
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end]
 }
 
 func parseImportPreview(text string, settings map[string]any) ([]importPreviewItem, []string) {
