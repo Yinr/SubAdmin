@@ -81,15 +81,14 @@ const batchCollecting = ref(false)
 const jobsLoading = ref(false)
 const auditLoading = ref(false)
 const importLoading = ref(false)
+const importExecuting = ref(false)
 const importTemplatesLoading = ref(false)
 const activeView = ref<ViewMode>('stats')
 const statsError = ref('')
 const auditError = ref('')
 const importTemplateName = ref('')
 const importTemplateDeleteMode = ref(false)
-const newImportGroupTag = ref('')
 const newImportModelTag = ref('')
-const customImportGroups = ref<string[]>([])
 const customImportModels = ref<string[]>([])
 const importPreviewPage = ref(1)
 const importPreviewPageSize = 10
@@ -158,7 +157,7 @@ const importForm = reactive({
   text: '',
   filename: '',
   groups: [] as string[],
-  proxy: '',
+  proxyId: '',
   priority: '',
   concurrency: '',
   namePrefix: '',
@@ -268,12 +267,11 @@ const importModelOptions = computed(() => {
   return Array.from(values)
 })
 
-const importGroupOptions = computed(() => {
-  const values = new Map<string, string>()
-  groupOptions.value.forEach((group) => values.set(group.id, group.name))
-  customImportGroups.value.forEach((group) => values.set(group, group))
-  return Array.from(values.entries()).map(([id, name]) => ({ id, name, custom: customImportGroups.value.includes(id) }))
-})
+const importGroupOptions = computed(() => groupOptions.value)
+
+const selectedImportGroupNames = computed(() => importForm.groups.map((id) => groupOptions.value.find((group) => group.id === id)?.name || `分组 #${id}`))
+
+const selectedImportProxyName = computed(() => proxyOptions.value.find((proxy) => proxy.id === importForm.proxyId)?.name || '')
 
 const pagedImportPreviewItems = computed(() => {
   return importPreview.value?.items || []
@@ -1124,12 +1122,12 @@ async function deleteImportTemplate(template: Record<string, unknown>) {
 function applyImportTemplate(template: Record<string, unknown>) {
   const data = (template.template || {}) as Record<string, unknown>
   importTemplateName.value = String(template.name || '')
-  ;(['proxy', 'priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
+  ;(['priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
     importForm[key] = String(data[key] || '')
   })
-  importForm.groups = Array.isArray(data.groups) ? data.groups.map(String) : []
+  importForm.proxyId = String(data.proxyId || data.proxy || '')
+  importForm.groups = Array.isArray(data.groupIds) ? data.groupIds.map(String) : Array.isArray(data.groups) ? data.groups.map(String) : []
   importForm.models = Array.isArray(data.models) ? data.models.map(String) : importForm.models
-  customImportGroups.value = importForm.groups.filter((group) => !groupOptions.value.some((option) => option.id === group))
   customImportModels.value = importForm.models.filter((model) => !['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'].includes(model))
 }
 
@@ -1143,19 +1141,6 @@ function toggleImportGroup(group: string) {
   const index = importForm.groups.indexOf(group)
   if (index >= 0) importForm.groups.splice(index, 1)
   else importForm.groups.push(group)
-}
-
-function addImportGroupTag() {
-  const value = newImportGroupTag.value.trim()
-  if (!value) return
-  if (!customImportGroups.value.includes(value) && !groupOptions.value.some((group) => group.id === value)) customImportGroups.value.push(value)
-  if (!importForm.groups.includes(value)) importForm.groups.push(value)
-  newImportGroupTag.value = ''
-}
-
-function removeImportGroupTag(group: string) {
-  customImportGroups.value = customImportGroups.value.filter((item) => item !== group)
-  importForm.groups = importForm.groups.filter((item) => item !== group)
 }
 
 function toggleImportModel(model: string) {
@@ -1209,13 +1194,89 @@ async function previewImport(page = 1) {
   }
 }
 
+async function executeImportAccounts() {
+  importError.value = ''
+  if (!activeSiteId.value || !activeSite.value) {
+    importError.value = '请先选择站点'
+    return
+  }
+  if (!importPreview.value) {
+    importError.value = '请先生成预览'
+    return
+  }
+  if (Number(importPreview.value.summary?.invalid || 0) > 0) {
+    importError.value = '预览存在需修正条目，请修正后再导入'
+    return
+  }
+  const total = Number(importPreview.value.summary?.recognized || importPreview.value.summary?.total || 0)
+  if (total <= 0) {
+    importError.value = '没有可导入账号'
+    return
+  }
+  const site = activeSite.value
+  const detail = [
+    `站点：${site.name}`,
+    `地址：${site.baseUrl}`,
+    `导入数量：${total}`,
+    `分组：${selectedImportGroupNames.value.join(' / ') || '使用上游默认分组'}`,
+    `代理：${selectedImportProxyName.value || '不指定'}`,
+    `模型：${importForm.models.join(' / ') || '保持原设置'}`,
+    `优先级/并发：${importForm.priority || '默认'} / ${importForm.concurrency || '默认'}`,
+  ].join('\n')
+  const ok = await askConfirm({
+    title: '确认导入账号？',
+    message: '此操作会写入下列 sub2api 站点，请确认站点信息无误。',
+    detail,
+    confirmText: '确认导入',
+    closeOnBackdrop: false,
+  })
+  if (!ok) return
+  importExecuting.value = true
+  try {
+    const job = await api<JobRecord>(`api/sites/${activeSiteId.value}/imports/accounts`, {
+      method: 'POST',
+      body: JSON.stringify({
+        text: importForm.text,
+        filename: importForm.filename,
+        settings: importExecutionSettings(),
+        confirmation: { confirmed: true, siteId: site.id, siteName: site.name, siteBaseUrl: site.baseUrl },
+      }),
+    })
+    await loadRecentJobs()
+    activeView.value = 'jobs'
+    await openJobResult(job)
+  } catch (error) {
+    importError.value = error instanceof Error ? error.message : '提交导入任务失败'
+  } finally {
+    importExecuting.value = false
+  }
+}
+
 function importPreviewSettings() {
   const settings: Record<string, unknown> = {}
-  ;(['proxy', 'priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
+  ;(['priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
     const value = String(importForm[key] || '').trim()
     if (value) settings[key] = value
   })
-  if (importForm.groups.length) settings.groups = importForm.groups
+  if (importForm.proxyId) settings.proxyId = Number(importForm.proxyId)
+  if (importForm.groups.length) settings.groupIds = importForm.groups.map(Number).filter((id) => Number.isFinite(id) && id > 0)
+  if (importForm.groups.length) settings.groups = selectedImportGroupNames.value
+  if (selectedImportProxyName.value) settings.proxy = selectedImportProxyName.value
+  if (importForm.models.length) settings.models = importForm.models
+  return settings
+}
+
+function importExecutionSettings() {
+  const settings: Record<string, unknown> = {}
+  const priorityText = String(importForm.priority || '').trim()
+  const concurrencyText = String(importForm.concurrency || '').trim()
+  const priority = Number(priorityText)
+  const concurrency = Number(concurrencyText)
+  if (String(importForm.namePrefix || '').trim()) settings.namePrefix = String(importForm.namePrefix).trim()
+  if (priorityText && Number.isFinite(priority)) settings.priority = priority
+  if (concurrencyText && Number.isFinite(concurrency)) settings.concurrency = concurrency
+  if (importForm.proxyId) settings.proxyId = Number(importForm.proxyId)
+  if (importForm.groups.length) settings.groupIds = importForm.groups.map(Number).filter((id) => Number.isFinite(id) && id > 0)
   if (importForm.models.length) settings.models = importForm.models
   return settings
 }
@@ -1237,8 +1298,7 @@ async function handleImportFile(event: Event) {
 function clearImportPreview() {
   importPreview.value = null
   importError.value = ''
-  Object.assign(importForm, { text: '', filename: '', groups: [], proxy: '', priority: '', concurrency: '', namePrefix: '', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'] })
-  customImportGroups.value = []
+  Object.assign(importForm, { text: '', filename: '', groups: [], proxyId: '', priority: '', concurrency: '', namePrefix: '', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'] })
   customImportModels.value = []
   importTemplateName.value = ''
   importTemplateDeleteMode.value = false
@@ -1962,11 +2022,13 @@ function isJobCancellable(job: JobRecord) {
 function jobTypeLabel(type: unknown) {
   if (type === 'batch_account_test') return '批量检测'
   if (type === 'batch_token_refresh') return '刷新令牌'
+  if (type === 'import_accounts') return '导入账号'
   return String(type || '未知')
 }
 
 function taskResultTitle() {
   if (batchTestJob.value?.type === 'batch_token_refresh') return '刷新令牌结果'
+  if (batchTestJob.value?.type === 'import_accounts') return '导入账号结果'
   return '批量检测结果'
 }
 
@@ -1979,6 +2041,7 @@ function batchResultFilterLabel() {
 
 function batchResultAction(result: Record<string, unknown>) {
   if (batchTestJob.value?.type === 'batch_token_refresh') return '令牌刷新'
+  if (batchTestJob.value?.type === 'import_accounts') return result.accountId ? `创建 #${result.accountId}` : '账号导入'
   return result.model || '未知'
 }
 
@@ -2364,7 +2427,7 @@ onUnmounted(() => {
         <div class="panel-head">
           <div>
             <h2>导入预览</h2>
-            <p class="muted">仅解析并预览账号内容，不会写入 sub2api，也不会在浏览器保存 credentials。</p>
+            <p class="muted">先解析预览账号内容，确认站点信息后再提交导入任务；浏览器不会保存 credentials。</p>
           </div>
           <button class="secondary" type="button" @click="clearImportPreview">清空</button>
         </div>
@@ -2374,7 +2437,7 @@ onUnmounted(() => {
           <div class="filter-grid">
             <label>选择文件<input type="file" accept=".json,.txt,.yaml,.yml,.csv" @change="handleImportFile" /></label>
             <label>代理
-              <select v-model="importForm.proxy" :disabled="proxiesLoading">
+              <select v-model="importForm.proxyId" :disabled="proxiesLoading">
                 <option value="">不指定代理</option>
                 <option v-for="proxy in proxyOptions" :key="proxy.id" :value="proxy.id">{{ proxy.name }}</option>
               </select>
@@ -2384,15 +2447,12 @@ onUnmounted(() => {
             <label>命名前缀<input v-model="importForm.namePrefix" placeholder="可选" /></label>
           </div>
           <div class="section-card compact-section import-setting-card">
-            <h3>分组</h3>
+            <h3>分组 <button type="button" class="mini inline-refresh" :disabled="groupsLoading" @click="loadGroups">{{ groupsLoading ? '刷新中...' : '刷新分组' }}</button></h3>
             <div class="active-filter-chips tag-picker">
-              <button v-for="group in importGroupOptions" :key="group.id" type="button" class="filter-chip" :class="{ active: importForm.groups.includes(group.id) }" @click="toggleImportGroup(group.id)">{{ group.name }}<span v-if="group.custom" @click.stop="removeImportGroupTag(group.id)">×</span></button>
+              <button v-for="group in importGroupOptions" :key="group.id" type="button" class="filter-chip" :class="{ active: importForm.groups.includes(group.id) }" @click="toggleImportGroup(group.id)">{{ group.name }}</button>
               <span v-if="!importGroupOptions.length" class="muted">暂无可选分组。</span>
             </div>
-            <div class="group-add-row">
-              <input v-model="newImportGroupTag" placeholder="输入新分组 tag" @keyup.enter="addImportGroupTag" />
-              <button type="button" class="secondary" @click="addImportGroupTag">添加分组</button>
-            </div>
+            <p class="muted">只允许选择上游已有分组；未选择时使用上游默认分组逻辑。</p>
           </div>
           <div class="section-card compact-section import-setting-card">
             <h3>模型</h3>
@@ -2406,6 +2466,7 @@ onUnmounted(() => {
           </div>
           <div class="form-actions">
             <button type="button" :disabled="importLoading || !activeSiteId" @click="previewImport(1)">{{ importLoading ? '解析中...' : '生成预览' }}</button>
+            <button type="button" class="danger" :disabled="importExecuting || importLoading || !importPreview || Number(importPreview.summary?.invalid || 0) > 0" @click="executeImportAccounts">{{ importExecuting ? '提交中...' : '确认导入' }}</button>
             <span class="muted">当前站点：{{ activeSite?.name || '未选择' }}<template v-if="importForm.filename"> · 文件：{{ importForm.filename }}</template></span>
           </div>
         </div>
@@ -2456,7 +2517,7 @@ onUnmounted(() => {
               </tbody>
             </table>
           </div>
-          <div class="pager" v-if="importPreview.items.length > importPreviewPageSize">
+          <div class="pager" v-if="importPreviewTotalPages > 1">
             <button class="secondary" :disabled="importPreviewPage <= 1 || importLoading" @click="previewImport(importPreviewPage - 1)">上一页</button>
             <span class="muted">第 {{ importPreviewPage }} / {{ importPreviewTotalPages }} 页，默认每页 {{ importPreviewPageSize }} 条</span>
             <button class="secondary" :disabled="importPreviewPage >= importPreviewTotalPages || importLoading" @click="previewImport(importPreviewPage + 1)">下一页</button>
@@ -2498,7 +2559,7 @@ onUnmounted(() => {
                   <td>{{ formatDateTime(job.createdAt) }}</td>
                   <td class="row-actions">
                     <button class="secondary mini" @click="openJobResult(job)">查看结果</button>
-                    <button class="secondary mini" :disabled="Number(job.failedCount || 0) <= 0 || batchTesting || batchRefreshing" @click="retryFailedJobFromList(job)">重试失败</button>
+                    <button class="secondary mini" :disabled="job.type === 'import_accounts' || Number(job.failedCount || 0) <= 0 || batchTesting || batchRefreshing" @click="retryFailedJobFromList(job)">重试失败</button>
                     <button class="secondary mini" :disabled="!isJobCancellable(job)" @click="cancelJobFromList(job)">取消任务</button>
                   </td>
                 </tr>

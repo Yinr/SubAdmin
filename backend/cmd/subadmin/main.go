@@ -258,6 +258,14 @@ func main() {
 			writeImportPreview(w, r, store.DB(), id)
 			return
 		}
+		if action == "imports/accounts" {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeCreateImportAccountsJob(w, r, jobService, id)
+			return
+		}
 		if action == "groups" {
 			if r.Method != http.MethodGet {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -907,6 +915,31 @@ func writeCreateBatchTokenRefreshJob(w http.ResponseWriter, r *http.Request, man
 	writeJSON(w, http.StatusCreated, job)
 }
 
+func writeCreateImportAccountsJob(w http.ResponseWriter, r *http.Request, manager *jobManager, siteID int64) {
+	if manager == nil {
+		writeError(w, http.StatusServiceUnavailable, "SUBADMIN_SECRET_KEY is required for jobs")
+		return
+	}
+	var input importAccountsInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if !input.Confirmation.Confirmed {
+		writeError(w, http.StatusBadRequest, "import confirmation is required")
+		return
+	}
+	input.Settings = cleanImportAccountSettings(input.Settings)
+	job, err := manager.createImportAccounts(r.Context(), siteID, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	slog.WarnContext(r.Context(), "import accounts job created", "job_id", job.ID, "type", job.Type, "site_id", siteID, "total_count", job.TotalCount)
+	writeAuditLog(manager.db, r, &siteID, "job.create", job.Type, job.TotalCount, map[string]any{"jobId": job.ID, "type": job.Type, "filename": input.Filename, "settings": safeImportExecutionSettings(input.Settings)}, map[string]any{"status": job.Status})
+	writeJSON(w, http.StatusCreated, job)
+}
+
 func (m *jobManager) createBatchAccountTest(ctx context.Context, siteID int64, input batchAccountTestInput) (*jobRecord, error) {
 	ids := cleanAccountIDs(input.IDs)
 	if len(ids) == 0 {
@@ -970,6 +1003,60 @@ VALUES (?, 'batch_token_refresh', 'queued', ?, 0, 0, 0, ?, '{}', ?)
 	return m.get(ctx, id)
 }
 
+func (m *jobManager) createImportAccounts(ctx context.Context, siteID int64, input importAccountsInput) (*jobRecord, error) {
+	input.Text = strings.TrimSpace(input.Text)
+	if input.Text == "" {
+		return nil, errors.New("text is required")
+	}
+	if len(input.Text) > 2<<20 {
+		return nil, errors.New("import input is too large")
+	}
+	if input.Confirmation.SiteID != 0 && input.Confirmation.SiteID != siteID {
+		return nil, errors.New("confirmed site does not match active site")
+	}
+	input.Settings = cleanImportAccountSettings(input.Settings)
+	accounts, err := buildImportAccounts(input.Text, input.Settings)
+	if err != nil {
+		return nil, err
+	}
+	if len(accounts) == 0 {
+		return nil, errors.New("no importable accounts found")
+	}
+	if err := m.validateImportReferences(ctx, siteID, input.Settings); err != nil {
+		return nil, err
+	}
+	site, _ := m.siteService.Get(ctx, siteID)
+	siteSummary := map[string]any{"id": siteID}
+	if site != nil {
+		siteSummary["name"] = site.Name
+		siteSummary["baseUrl"] = site.BaseURL
+	}
+	safeInput := map[string]any{
+		"filename": input.Filename,
+		"settings": safeImportExecutionSettings(input.Settings),
+		"summary":  map[string]any{"total": len(accounts)},
+		"site":     siteSummary,
+	}
+	inputJSON, err := json.Marshal(safeInput)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	res, err := m.db.ExecContext(ctx, `
+INSERT INTO jobs (site_id, type, status, total_count, done_count, success_count, failed_count, input_json, result_json, created_at)
+VALUES (?, 'import_accounts', 'queued', ?, 0, 0, 0, ?, '{"items":[]}', ?)
+`, siteID, len(accounts), string(inputJSON), now)
+	if err != nil {
+		return nil, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	m.startImportAccounts(id, siteID, accounts, input.Settings)
+	return m.get(ctx, id)
+}
+
 func (m *jobManager) startBatchAccountTest(jobID, siteID int64, input batchAccountTestInput) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()
@@ -997,6 +1084,21 @@ func (m *jobManager) startBatchTokenRefresh(jobID, siteID int64, input batchToke
 			m.mu.Unlock()
 		}()
 		m.runBatchTokenRefresh(ctx, jobID, siteID, input)
+	}()
+}
+
+func (m *jobManager) startImportAccounts(jobID, siteID int64, accounts []importAccountExecution, settings importAccountSettings) {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.mu.Lock()
+	m.cancels[jobID] = cancel
+	m.mu.Unlock()
+	go func() {
+		defer func() {
+			m.mu.Lock()
+			delete(m.cancels, jobID)
+			m.mu.Unlock()
+		}()
+		m.runImportAccounts(ctx, jobID, siteID, accounts, settings)
 	}()
 }
 
@@ -1082,6 +1184,96 @@ func (m *jobManager) runBatchTokenRefresh(ctx context.Context, jobID, siteID int
 	}
 	_ = m.finishJob(jobID, status, items, successCount, failedCount, "")
 	slog.Info("job finished", "job_id", jobID, "type", "batch_token_refresh", "status", status, "success_count", successCount, "failed_count", failedCount, "duration_ms", durationMS)
+}
+
+func (m *jobManager) runImportAccounts(ctx context.Context, jobID, siteID int64, accounts []importAccountExecution, settings importAccountSettings) {
+	now := time.Now().Unix()
+	_, _ = m.db.ExecContext(context.Background(), `UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?`, now, jobID)
+	slog.Warn("job started", "job_id", jobID, "type", "import_accounts", "site_id", siteID, "total_count", len(accounts))
+	if ctx.Err() != nil {
+		_ = m.finishJob(jobID, "cancelled", nil, 0, 0, ctx.Err().Error())
+		return
+	}
+	requestAccounts := make([]map[string]any, 0, len(accounts))
+	for _, account := range accounts {
+		payload := map[string]any{
+			"name":        account.Name,
+			"platform":    account.Platform,
+			"type":        account.Type,
+			"credentials": account.Credentials,
+			"group_ids":   settings.GroupIDs,
+		}
+		if len(account.Extra) > 0 {
+			payload["extra"] = account.Extra
+		}
+		if settings.ProxyID != nil {
+			payload["proxy_id"] = *settings.ProxyID
+		}
+		if settings.Priority != nil {
+			payload["priority"] = *settings.Priority
+		}
+		if settings.Concurrency != nil {
+			payload["concurrency"] = *settings.Concurrency
+		}
+		requestAccounts = append(requestAccounts, payload)
+	}
+	started := time.Now()
+	data, statusCode, err := m.siteService.AdminPOSTJSONWithHeaders(ctx, siteID, "/api/v1/admin/accounts/batch", map[string]any{"accounts": requestAccounts}, map[string]string{
+		"Idempotency-Key": fmt.Sprintf("subadmin-import-%d", jobID),
+	})
+	durationMS := time.Since(started).Milliseconds()
+	if err != nil {
+		slog.Warn("import accounts upstream request failed", "job_id", jobID, "site_id", siteID, "status_code", statusCode, "duration_ms", durationMS, "error", err)
+	} else {
+		slog.Info("import accounts upstream request finished", "job_id", jobID, "site_id", siteID, "status_code", statusCode, "duration_ms", durationMS)
+	}
+	items := buildImportAccountItems(accounts, statusCode, durationMS, data, err)
+	successCount, failedCount := countJobItems(items)
+	_ = m.updateJobProgress(jobID, items, successCount, failedCount)
+	status := "succeeded"
+	if failedCount > 0 {
+		status = "failed"
+	}
+	_ = m.finishJob(jobID, status, items, successCount, failedCount, "")
+	slog.Info("job finished", "job_id", jobID, "type", "import_accounts", "status", status, "success_count", successCount, "failed_count", failedCount, "duration_ms", durationMS)
+}
+
+func buildImportAccountItems(accounts []importAccountExecution, statusCode int, durationMS int64, data []byte, err error) []map[string]any {
+	items := make([]map[string]any, 0, len(accounts))
+	if err != nil {
+		for _, account := range accounts {
+			items = append(items, map[string]any{"id": account.Index, "index": account.Index, "name": account.Name, "platform": account.Platform, "type": account.Type, "ok": false, "statusCode": statusCode, "durationMs": durationMS, "error": err.Error()})
+		}
+		return items
+	}
+	response := decodeJSONValue(sanitizeJSONForBrowser(data))
+	dataMap := unwrapResponseMap(response)
+	results, _ := dataMap["results"].([]any)
+	for index, account := range accounts {
+		item := map[string]any{"id": account.Index, "index": account.Index, "name": account.Name, "platform": account.Platform, "type": account.Type, "statusCode": statusCode, "durationMs": durationMS}
+		var result map[string]any
+		if index < len(results) {
+			result, _ = results[index].(map[string]any)
+		}
+		if result == nil {
+			ok := statusCode >= 200 && statusCode < 300
+			item["ok"] = ok
+			if !ok {
+				item["error"] = fmt.Sprintf("HTTP %d", statusCode)
+			}
+			items = append(items, item)
+			continue
+		}
+		item["ok"] = result["success"] == true
+		if createdID := int64FromAny(result["id"]); createdID > 0 {
+			item["accountId"] = createdID
+		}
+		if message := strings.TrimSpace(fmt.Sprint(result["error"])); message != "" && message != "<nil>" {
+			item["error"] = message
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 func buildTokenRefreshItems(ids []int64, meta map[string]accountMeta, statusCode int, durationMS int64, data []byte, err error) []map[string]any {
@@ -1459,6 +1651,38 @@ type importPreviewInput struct {
 	Settings map[string]any `json:"settings"`
 	Limit    int            `json:"limit"`
 	Offset   int            `json:"offset"`
+}
+
+type importAccountsInput struct {
+	Text         string                 `json:"text"`
+	Filename     string                 `json:"filename"`
+	Settings     importAccountSettings  `json:"settings"`
+	Confirmation importAccountConfirm   `json:"confirmation"`
+}
+
+type importAccountSettings struct {
+	NamePrefix  string   `json:"namePrefix"`
+	GroupIDs    []int64  `json:"groupIds"`
+	ProxyID     *int64   `json:"proxyId"`
+	Models      []string `json:"models"`
+	Priority    *int     `json:"priority"`
+	Concurrency *int     `json:"concurrency"`
+}
+
+type importAccountConfirm struct {
+	Confirmed   bool   `json:"confirmed"`
+	SiteID      int64  `json:"siteId"`
+	SiteName    string `json:"siteName"`
+	SiteBaseURL string `json:"siteBaseUrl"`
+}
+
+type importAccountExecution struct {
+	Index       int            `json:"index"`
+	Name        string         `json:"name"`
+	Platform    string         `json:"platform"`
+	Type        string         `json:"type"`
+	Credentials map[string]any `json:"-"`
+	Extra       map[string]any `json:"-"`
 }
 
 type importTemplateRecord struct {
@@ -2010,6 +2234,254 @@ func sanitizeImportSettings(settings map[string]any) map[string]any {
 			continue
 		}
 		result[key] = value
+	}
+	return result
+}
+
+func buildImportAccounts(text string, settings importAccountSettings) ([]importAccountExecution, error) {
+	chunks := splitImportChunks(text)
+	accounts := make([]importAccountExecution, 0, len(chunks))
+	for index, chunk := range chunks {
+		preview := buildImportPreviewItem(index+1, chunk)
+		if !preview.Recognized {
+			return nil, fmt.Errorf("第 %d 条缺少必要字段: %s", index+1, strings.Join(preview.MissingFields, ", "))
+		}
+		raw, err := parseImportAccountObject(chunk)
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 条解析失败: %w", index+1, err)
+		}
+		credentials := mapFromAny(raw["credentials"])
+		if credentials == nil {
+			credentials = credentialsFromFlatFields(parseImportFields(chunk))
+		}
+		if len(credentials) == 0 {
+			return nil, fmt.Errorf("第 %d 条缺少 credentials", index+1)
+		}
+		models := cleanStringList(settings.Models)
+		if len(models) > 0 {
+			credentials["model_mapping"] = identityModelMapping(models)
+		}
+		extra := mapFromAny(raw["extra"])
+		name := strings.TrimSpace(preview.Name)
+		if name == "" {
+			name = fmt.Sprintf("导入账号 #%d", index+1)
+		}
+		if settings.NamePrefix != "" && !strings.HasPrefix(name, settings.NamePrefix) {
+			name = settings.NamePrefix + name
+		}
+		accounts = append(accounts, importAccountExecution{
+			Index:       index + 1,
+			Name:        name,
+			Platform:    strings.TrimSpace(preview.Platform),
+			Type:        strings.TrimSpace(preview.Type),
+			Credentials: credentials,
+			Extra:       extra,
+		})
+	}
+	return accounts, nil
+}
+
+func parseImportAccountObject(chunk string) (map[string]any, error) {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(chunk)), &raw); err == nil {
+		return raw, nil
+	}
+	fields := parseImportFields(chunk)
+	result := map[string]any{}
+	for key, value := range fields {
+		result[key] = value
+	}
+	return result, nil
+}
+
+func credentialsFromFlatFields(fields map[string]string) map[string]any {
+	credentials := map[string]any{}
+	for key, value := range fields {
+		if value == "" {
+			continue
+		}
+		credKey := ""
+		if strings.HasPrefix(key, "credentials.") {
+			credKey = strings.TrimPrefix(key, "credentials.")
+		} else if isCredentialImportKey(key) {
+			credKey = key
+		}
+		if credKey != "" {
+			credentials[credKey] = value
+		}
+	}
+	return credentials
+}
+
+func isCredentialImportKey(key string) bool {
+	switch key {
+	case "access_token", "refresh_token", "id_token", "api_key", "base_url", "client_id", "account_id", "chatgpt_account_id", "account_uuid", "org_uuid", "project_id", "tier_id", "service_account_json", "aws_access_key_id", "aws_secret_access_key", "aws_session_token", "aws_region", "auth_mode":
+		return true
+	default:
+		return strings.Contains(key, "token") || strings.Contains(key, "cookie") || strings.Contains(key, "credential")
+	}
+}
+
+func mapFromAny(value any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	if typed, ok := value.(map[string]any); ok {
+		result := map[string]any{}
+		for key, child := range typed {
+			result[key] = child
+		}
+		return result
+	}
+	return nil
+}
+
+func identityModelMapping(models []string) map[string]string {
+	mapping := map[string]string{}
+	for _, model := range cleanStringList(models) {
+		mapping[model] = model
+	}
+	return mapping
+}
+
+func cleanStringList(items []string) []string {
+	result := []string{}
+	seen := map[string]bool{}
+	for _, item := range items {
+		text := strings.TrimSpace(item)
+		if text == "" || seen[text] {
+			continue
+		}
+		seen[text] = true
+		result = append(result, text)
+	}
+	return result
+}
+
+func cleanImportAccountSettings(settings importAccountSettings) importAccountSettings {
+	settings.NamePrefix = strings.TrimSpace(settings.NamePrefix)
+	settings.GroupIDs = cleanAccountIDs(settings.GroupIDs)
+	settings.Models = cleanStringList(settings.Models)
+	if settings.ProxyID != nil && *settings.ProxyID <= 0 {
+		settings.ProxyID = nil
+	}
+	if settings.Priority != nil {
+		value := *settings.Priority
+		settings.Priority = &value
+	}
+	if settings.Concurrency != nil {
+		value := *settings.Concurrency
+		if value < 0 {
+			value = 0
+		}
+		settings.Concurrency = &value
+	}
+	return settings
+}
+
+func safeImportExecutionSettings(settings importAccountSettings) map[string]any {
+	result := map[string]any{}
+	if settings.NamePrefix != "" {
+		result["namePrefix"] = settings.NamePrefix
+	}
+	if len(settings.GroupIDs) > 0 {
+		result["groupIds"] = settings.GroupIDs
+	}
+	if settings.ProxyID != nil {
+		result["proxyId"] = *settings.ProxyID
+	}
+	if len(settings.Models) > 0 {
+		result["models"] = settings.Models
+	}
+	if settings.Priority != nil {
+		result["priority"] = *settings.Priority
+	}
+	if settings.Concurrency != nil {
+		result["concurrency"] = *settings.Concurrency
+	}
+	return result
+}
+
+func (m *jobManager) validateImportReferences(ctx context.Context, siteID int64, settings importAccountSettings) error {
+	if len(settings.GroupIDs) > 0 {
+		groups, err := m.fetchUpstreamList(ctx, siteID, "/api/v1/admin/groups/all")
+		if err != nil {
+			return err
+		}
+		ids := map[int64]bool{}
+		for _, group := range groups {
+			if id := int64FromAny(group["id"]); id > 0 {
+				ids[id] = true
+			}
+		}
+		for _, id := range settings.GroupIDs {
+			if !ids[id] {
+				return fmt.Errorf("group %d not found", id)
+			}
+		}
+	}
+	if settings.ProxyID != nil {
+		proxies, err := m.fetchUpstreamList(ctx, siteID, "/api/v1/admin/proxies/all")
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, proxy := range proxies {
+			if int64FromAny(proxy["id"]) == *settings.ProxyID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("proxy %d not found", *settings.ProxyID)
+		}
+	}
+	return nil
+}
+
+func (m *jobManager) fetchUpstreamList(ctx context.Context, siteID int64, path string) ([]map[string]any, error) {
+	data, statusCode, err := m.siteService.AdminGET(ctx, siteID, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		return nil, fmt.Errorf("upstream %s returned HTTP %d", path, statusCode)
+	}
+	value := decodeJSONValue(sanitizeJSONForBrowser(data))
+	return listMapsFromAny(value), nil
+}
+
+func listMapsFromAny(value any) []map[string]any {
+	if items, ok := value.([]any); ok {
+		return mapsFromItems(items)
+	}
+	root, _ := value.(map[string]any)
+	if root == nil {
+		return nil
+	}
+	for _, key := range []string{"data", "items", "groups", "proxies"} {
+		child := root[key]
+		if items, ok := child.([]any); ok {
+			return mapsFromItems(items)
+		}
+		if childMap, ok := child.(map[string]any); ok {
+			if items, ok := childMap["items"].([]any); ok {
+				return mapsFromItems(items)
+			}
+			if nested := listMapsFromAny(childMap); len(nested) > 0 {
+				return nested
+			}
+		}
+	}
+	return nil
+}
+
+func mapsFromItems(items []any) []map[string]any {
+	result := []map[string]any{}
+	for _, item := range items {
+		if typed, ok := item.(map[string]any); ok {
+			result = append(result, typed)
+		}
 	}
 	return result
 }

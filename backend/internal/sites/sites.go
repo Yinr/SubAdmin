@@ -279,6 +279,10 @@ func (s *Service) AdminGET(ctx context.Context, id int64, path string, query url
 }
 
 func (s *Service) AdminPOSTJSON(ctx context.Context, id int64, path string, payload any) (json.RawMessage, int, error) {
+	return s.AdminPOSTJSONWithHeaders(ctx, id, path, payload, nil)
+}
+
+func (s *Service) AdminPOSTJSONWithHeaders(ctx context.Context, id int64, path string, payload any, headers map[string]string) (json.RawMessage, int, error) {
 	stored, err := s.getStored(ctx, id)
 	if err != nil {
 		return nil, 0, err
@@ -298,6 +302,11 @@ func (s *Service) AdminPOSTJSON(ctx context.Context, id int64, path string, payl
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", adminKey)
+	for key, value := range headers {
+		if strings.TrimSpace(key) != "" && strings.TrimSpace(value) != "" {
+			req.Header.Set(key, value)
+		}
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, 0, err

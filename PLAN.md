@@ -35,7 +35,7 @@ Implemented capabilities:
 - Jobs view lists recent jobs, reopens batch-test/token-refresh results, retries failed items, and cancels queued/running jobs.
 - Statistics dashboard uses real upstream dashboard and Ops endpoints, defaults to 24h/hourly, and supports isolated refresh for user/account concurrency panels.
 - Application logs use structured JSON Lines with configurable level, request IDs, and simple file rotation under `SUBADMIN_LOG_DIR`.
-- Import page supports pasted text or small files, parses known account-shaped content server-side, and returns a sanitized preview without upstream writes. Preview rows are returned in backend pages of 10 by default and explicitly show applied draft settings such as name prefix, selected groups, proxy, models, priority, and concurrency.
+- Import page supports pasted text or small files, parses known account-shaped content server-side, and returns a sanitized preview. Confirmed imports run through Jobs and call sub2api's `/api/v1/admin/accounts/batch`; selected model lists are written as account `credentials.model_mapping` identity mappings.
 - Import templates can save and apply non-sensitive preview defaults.
 - Audit logs record site writes, job actions, and import preview summaries; the Audit page lists recent audit records.
 - Protected OpenAPI, Swagger UI, and AI reference docs are available inside the logged-in UI.
@@ -56,37 +56,27 @@ Keep completed implementation details out of this plan unless they affect future
 
 ## Current Limitations
 
-- Import templates currently cover preview defaults only; they do not store account credentials or execute imports.
+- Import templates cover non-sensitive import defaults only; they do not store account credentials.
 - Jobs are single-process goroutines; there is no distributed worker, durable queue, cron scheduler, or parallel execution model.
 - Per-item job outcomes are stored in `result_json`; there is no `job_items` table yet.
 - Filtered account ID collection is still frontend-driven because upstream and local filter semantics are not fully reproducible server-side.
 - Token refresh cancellation is best-effort: SubAdmin can cancel local tracking/request state, but it cannot roll back upstream refresh work already performed by sub2api.
-- High-risk account writes and import execution remain disabled until explicit confirmation and job execution are implemented on top of audit logging.
+- Import execution uses single upstream batch requests, so cancellation can prevent queued/local tracking only and cannot roll back upstream account creation already accepted by sub2api.
 
-## Current Import Preview Scope
+## Current Import Scope
 
-Import preview is implemented as a safe parsing and validation step only. It does not create accounts, refresh tokens, or call upstream write APIs.
+Import starts with server-side preview, then requires explicit target-site confirmation before creating a persisted Job.
 
 Current scope:
 
 - Accept pasted text and small uploaded files in known sub2api account formats.
 - Parse input server-side only.
 - Return recognized accounts, platform/type, display name, group hints, missing required fields, duplicate risks, and validation warnings.
-- Allow draft import settings such as default group, proxy, priority, concurrency, and naming rules.
+- Allow import settings such as existing groups, existing proxy, priority, concurrency, naming rules, and model list.
+- Execute confirmed imports through sub2api's batch account creation endpoint.
+- Store selected models in `credentials.model_mapping` using identity mapping.
 - Store no upstream credentials in browser storage.
-- Do not call upstream write APIs.
-- Do not create accounts.
-
-## Planned After Import Preview
-
-### Import Execution
-
-- Only start after import preview and audit logs are in place.
-- Require explicit confirmation.
-- Execute through persisted Jobs.
-- Store per-item outcomes.
-- Support retry where safe.
-- Never bypass audit logging for upstream writes.
+- Store no account credentials in job input, job result, audit logs, or application logs.
 
 ### High-Risk Account Operations
 
@@ -105,4 +95,4 @@ Current scope:
 
 ## Immediate Next Step
 
-Design confirmed import execution through Jobs without bypassing audit logging.
+Polish confirmed import result display and failure diagnostics after real-world import trials.
