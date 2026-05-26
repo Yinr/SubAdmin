@@ -3,6 +3,17 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import ExpandablePanel from './components/ExpandablePanel.vue'
 import ConcurrencyTable from './components/ConcurrencyTable.vue'
 import StatsTable from './components/StatsTable.vue'
+import {
+  applyTemplateToImportForm,
+  buildImportExecutionSettings,
+  buildImportModelOptions,
+  buildImportPreviewSettings,
+  createDefaultImportForm,
+  customImportModelsFromSelection,
+  defaultImportModels,
+  resetImportForm,
+  splitImportModelTags,
+} from './importSettings'
 
 type Site = {
   id: number
@@ -153,16 +164,7 @@ const batchTestForm = reactive({
   logResponses: false,
 })
 
-const importForm = reactive({
-  text: '',
-  filename: '',
-  groups: [] as string[],
-  proxyId: '',
-  priority: '',
-  concurrency: '',
-  namePrefix: '',
-  models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'] as string[],
-})
+const importForm = reactive(createDefaultImportForm())
 
 const scheduleQuickFilter = ref('all')
 const groupToAdd = ref('')
@@ -261,11 +263,7 @@ const upstreamGroupOptions = computed(() => [{ id: 'ungrouped', name: '未分组
 
 const proxyOptions = computed(() => proxies.value.map((proxy) => ({ id: String(proxy.id || ''), name: String(proxy.name || proxy.id || '未命名代理') })).filter((proxy) => proxy.id))
 
-const importModelOptions = computed(() => {
-  const values = new Set(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'])
-  customImportModels.value.forEach((model) => values.add(model))
-  return Array.from(values)
-})
+const importModelOptions = computed(() => buildImportModelOptions(customImportModels.value))
 
 const importGroupOptions = computed(() => groupOptions.value)
 
@@ -1134,13 +1132,8 @@ async function deleteImportTemplate(template: Record<string, unknown>) {
 function applyImportTemplate(template: Record<string, unknown>) {
   const data = (template.template || {}) as Record<string, unknown>
   importTemplateName.value = String(template.name || '')
-  ;(['priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
-    importForm[key] = String(data[key] || '')
-  })
-  importForm.proxyId = String(data.proxyId || data.proxy || '')
-  importForm.groups = Array.isArray(data.groupIds) ? data.groupIds.map(String) : Array.isArray(data.groups) ? data.groups.map(String) : []
-  importForm.models = Array.isArray(data.models) ? data.models.map(String) : importForm.models
-  customImportModels.value = importForm.models.filter((model) => !['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'].includes(model))
+  applyTemplateToImportForm(importForm, data)
+  customImportModels.value = customImportModelsFromSelection(importForm.models)
 }
 
 function importTemplateDiff(template: Record<string, unknown>) {
@@ -1162,9 +1155,9 @@ function toggleImportModel(model: string) {
 }
 
 function addImportModelTag() {
-  const values = newImportModelTag.value.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean)
+  const values = splitImportModelTags(newImportModelTag.value)
   values.forEach((value) => {
-    if (!customImportModels.value.includes(value) && !['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'].includes(value)) customImportModels.value.push(value)
+    if (!customImportModels.value.includes(value) && !defaultImportModels.includes(value)) customImportModels.value.push(value)
     if (!importForm.models.includes(value)) importForm.models.push(value)
   })
   newImportModelTag.value = ''
@@ -1265,32 +1258,11 @@ async function executeImportAccounts() {
 }
 
 function importPreviewSettings() {
-  const settings: Record<string, unknown> = {}
-  ;(['priority', 'concurrency', 'namePrefix'] as const).forEach((key) => {
-    const value = String(importForm[key] || '').trim()
-    if (value) settings[key] = value
-  })
-  if (importForm.proxyId) settings.proxyId = Number(importForm.proxyId)
-  if (importForm.groups.length) settings.groupIds = importForm.groups.map(Number).filter((id) => Number.isFinite(id) && id > 0)
-  if (importForm.groups.length) settings.groups = selectedImportGroupNames.value
-  if (selectedImportProxyName.value) settings.proxy = selectedImportProxyName.value
-  if (importForm.models.length) settings.models = importForm.models
-  return settings
+  return buildImportPreviewSettings(importForm, selectedImportGroupNames.value, selectedImportProxyName.value)
 }
 
 function importExecutionSettings() {
-  const settings: Record<string, unknown> = {}
-  const priorityText = String(importForm.priority || '').trim()
-  const concurrencyText = String(importForm.concurrency || '').trim()
-  const priority = Number(priorityText)
-  const concurrency = Number(concurrencyText)
-  if (String(importForm.namePrefix || '').trim()) settings.namePrefix = String(importForm.namePrefix).trim()
-  if (priorityText && Number.isFinite(priority)) settings.priority = priority
-  if (concurrencyText && Number.isFinite(concurrency)) settings.concurrency = concurrency
-  if (importForm.proxyId) settings.proxyId = Number(importForm.proxyId)
-  if (importForm.groups.length) settings.groupIds = importForm.groups.map(Number).filter((id) => Number.isFinite(id) && id > 0)
-  if (importForm.models.length) settings.models = importForm.models
-  return settings
+  return buildImportExecutionSettings(importForm)
 }
 
 async function handleImportFile(event: Event) {
@@ -1310,7 +1282,7 @@ async function handleImportFile(event: Event) {
 function clearImportPreview() {
   importPreview.value = null
   importError.value = ''
-  Object.assign(importForm, { text: '', filename: '', groups: [], proxyId: '', priority: '', concurrency: '', namePrefix: '', models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-image-2'] })
+  resetImportForm(importForm)
   customImportModels.value = []
   importTemplateName.value = ''
   importTemplateDeleteMode.value = false
