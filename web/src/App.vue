@@ -501,7 +501,18 @@ async function loadStatistics() {
       end_date: statsRange.endDate,
       granularity: statsRange.granularity,
     })
-    statistics.value = await api<Record<string, unknown>>(`api/sites/${activeSiteId.value}/statistics?${params.toString()}`)
+    const [statsPayload, activeAccountsPayload] = await Promise.all([
+      api<Record<string, unknown>>(`api/sites/${activeSiteId.value}/statistics?${params.toString()}`),
+      api<any>(`api/sites/${activeSiteId.value}/accounts?status=active&page=1&page_size=1&lite=true`).catch(() => null),
+    ])
+    const stats = unwrapAPIData(statsPayload.stats)
+    statistics.value = {
+      ...statsPayload,
+      stats: {
+        ...stats,
+        active_status_accounts: activeAccountsPayload ? payloadTotal(activeAccountsPayload) : stats.normal_accounts,
+      },
+    }
   } catch (error) {
     statsError.value = error instanceof Error ? error.message : '加载统计失败'
   } finally {
@@ -804,6 +815,10 @@ function statValue(source: Record<string, unknown>, key: string) {
   if (value === undefined || value === null || value === '') return '暂无'
   if (typeof value === 'number') return value.toLocaleString('zh-CN')
   return String(value)
+}
+
+function statisticsActiveAccounts() {
+  return statValue(statisticsStats.value, 'active_status_accounts')
 }
 
 function compactNumber(value: unknown) {
@@ -2256,7 +2271,7 @@ onUnmounted(() => {
           </article>
           <article class="stat-panel-card">
             <span>账号状态</span>
-            <strong>{{ statValue(statisticsStats, 'normal_accounts') }} / {{ statValue(statisticsStats, 'total_accounts') }}</strong>
+            <strong>{{ statisticsActiveAccounts() }} / {{ statValue(statisticsStats, 'total_accounts') }}</strong>
             <div class="status-chip-row">
               <span class="status-tag status-tag-warn">限流 {{ statValue(statisticsStats, 'ratelimit_accounts') }}</span>
               <span class="status-tag status-tag-danger">错误 {{ statValue(statisticsStats, 'error_accounts') }}</span>
