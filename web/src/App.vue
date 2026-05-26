@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import ExpandablePanel from './components/ExpandablePanel.vue'
 import ConcurrencyTable from './components/ConcurrencyTable.vue'
 import StatsTable from './components/StatsTable.vue'
+import { accountStatusOptions, accountTypeOptions, platformOptions, privacyModeOptions } from './appOptions'
 import {
   applyTemplateToImportForm,
   buildImportExecutionSettings,
@@ -11,9 +12,14 @@ import {
   createDefaultImportForm,
   customImportModelsFromSelection,
   defaultImportModels,
+  importItemList,
+  importItemName,
+  importItemStatus,
+  importItemStatusClass,
   resetImportForm,
   splitImportModelTags,
 } from './importSettings'
+import type { ImportPreviewItem } from './importSettings'
 
 type Site = {
   id: number
@@ -33,7 +39,6 @@ type JobRecord = Record<string, unknown>
 type GroupState = 'any' | 'include' | 'exclude'
 type ViewMode = 'stats' | 'accounts' | 'import' | 'jobs' | 'audit' | 'sites' | 'docs'
 type ApiOptions = RequestInit & { timeoutMs?: number }
-type ImportPreviewItem = Record<string, unknown>
 type ImportPreview = {
   items: ImportPreviewItem[]
   warnings: string[]
@@ -186,40 +191,6 @@ const accountPager = reactive({
 
 const accountCache = new Map<string, { expiresAt: number; payload: any }>()
 let accountRequestSeq = 0
-
-const platformOptions = [
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'gemini', label: 'Gemini' },
-  { value: 'antigravity', label: 'Antigravity' },
-]
-
-const accountTypeOptions = [
-  { value: 'oauth', label: 'OAuth' },
-  { value: 'setup-token', label: 'Setup Token' },
-  { value: 'apikey', label: 'API Key' },
-  { value: 'bedrock', label: 'AWS Bedrock' },
-  { value: 'upstream', label: '对接上游' },
-  { value: 'service-account', label: 'Service Account' },
-]
-
-const accountStatusOptions = [
-  { value: 'active', label: '正常' },
-  { value: 'inactive', label: '停用' },
-  { value: 'error', label: '错误' },
-  { value: 'rate_limited', label: '限流中' },
-  { value: 'temp_unschedulable', label: '临时不可调度' },
-  { value: 'unschedulable', label: '不可调度' },
-]
-
-const privacyModeOptions = [
-  { value: '__unset__', label: '未设置' },
-  { value: 'training_off', label: '已关闭训练数据共享' },
-  { value: 'training_set_cf_blocked', label: '被 Cloudflare 拦截，训练可能仍开启' },
-  { value: 'training_set_failed', label: '关闭训练数据共享失败' },
-  { value: 'privacy_set', label: '已关闭遥测和营销邮件' },
-  { value: 'privacy_set_failed', label: '隐私设置失败' },
-]
 
 const accountTotalPages = computed(() => (accountPager.total ? Math.ceil(accountPager.total / accountPager.pageSize) : 0))
 const accountPageButtons = computed(() => {
@@ -2036,23 +2007,6 @@ function selectedTaskResultJSON() {
 
 function importSummaryValue(key: string) {
   return importPreview.value?.summary?.[key] ?? 0
-}
-
-function importItemStatus(item: ImportPreviewItem) {
-  return item.recognized ? '可预览' : '需修正'
-}
-
-function importItemStatusClass(item: ImportPreviewItem) {
-  return item.recognized ? 'tag tag-success' : 'tag tag-warning'
-}
-
-function importItemList(item: ImportPreviewItem, key: string) {
-  const value = item[key]
-  return Array.isArray(value) && value.length ? value.join(' / ') : '无'
-}
-
-function importItemName(item: ImportPreviewItem) {
-  return String(item.name || '未命名')
 }
 
 function auditSummaryText(value: unknown) {

@@ -11,6 +11,8 @@ export type ImportFormState = {
   models: string[]
 }
 
+export type ImportPreviewItem = Record<string, unknown>
+
 export function createDefaultImportForm(): ImportFormState {
   return {
     text: '',
@@ -84,4 +86,21 @@ export function buildImportExecutionSettings(form: ImportFormState) {
 
 export function resetImportForm(form: ImportFormState) {
   Object.assign(form, createDefaultImportForm())
+}
+
+export function importItemStatus(item: ImportPreviewItem) {
+  return item.recognized ? '可预览' : '需修正'
+}
+
+export function importItemStatusClass(item: ImportPreviewItem) {
+  return item.recognized ? 'tag tag-success' : 'tag tag-warning'
+}
+
+export function importItemList(item: ImportPreviewItem, key: string) {
+  const value = item[key]
+  return Array.isArray(value) && value.length ? value.join(' / ') : '无'
+}
+
+export function importItemName(item: ImportPreviewItem) {
+  return String(item.name || '未命名')
 }
