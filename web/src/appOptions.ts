@@ -31,3 +31,9 @@ export const privacyModeOptions = [
   { value: 'privacy_set', label: '已关闭遥测和营销邮件' },
   { value: 'privacy_set_failed', label: '隐私设置失败' },
 ]
+
+export function optionLabel(options: { value: string; label: string }[], value: unknown) {
+  const text = String(value || '')
+  if (!text) return '未知'
+  return options.find((option) => option.value === text)?.label || text
+}

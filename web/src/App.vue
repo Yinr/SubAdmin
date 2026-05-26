@@ -3,8 +3,33 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import ExpandablePanel from './components/ExpandablePanel.vue'
 import ConcurrencyTable from './components/ConcurrencyTable.vue'
 import StatsTable from './components/StatsTable.vue'
+import {
+  accountDetailJSON,
+  accountErrorText,
+  accountGroupEntries,
+  accountGroupIDs,
+  accountGroupPreview,
+  accountGroups,
+  accountID,
+  accountLastUsedLabel,
+  accountName,
+  accountNote,
+  accountProxy,
+  accountProxyRows,
+  accountSchedule,
+  accountScheduleKey,
+  accountScheduleRows,
+  accountScheduleTone,
+  accountStatusLabel,
+  accountStatusTone,
+  accountUsageMetrics,
+  accountUsageRows,
+  groupPopoverKey,
+  groupStateLabel,
+  normalizeAccounts,
+} from './accountDisplay'
 import { api, textResource } from './apiClient'
-import { accountStatusOptions, accountTypeOptions, platformOptions, privacyModeOptions } from './appOptions'
+import { accountStatusOptions, accountTypeOptions, optionLabel, platformOptions, privacyModeOptions } from './appOptions'
 import {
   applyTemplateToImportForm,
   buildImportExecutionSettings,
@@ -37,8 +62,6 @@ import {
   chartY,
   concurrencyPercent,
   rankingWidth,
-  usagePercentText,
-  usagePercentValue,
   usagePercentWidth,
 } from './visualMetrics'
 
@@ -678,16 +701,6 @@ async function loadProxies() {
   }
 }
 
-function normalizeAccounts(payload: any): Account[] {
-  if (Array.isArray(payload)) return payload
-  if (Array.isArray(payload.data)) return payload.data
-  if (payload.data && Array.isArray(payload.data.items)) return payload.data.items
-  if (payload.data && Array.isArray(payload.data.accounts)) return payload.data.accounts
-  if (Array.isArray(payload.items)) return payload.items
-  if (Array.isArray(payload.accounts)) return payload.accounts
-  return []
-}
-
 function filterQueryValue(key: string, value: string) {
   if (!value.trim()) return ''
   if (key === 'privacyMode') return value.trim()
@@ -720,12 +733,6 @@ function currentFilteredIDsCacheKey() {
     .map(([id, state]) => `${id}:${state}`)
     .join(',')
   return JSON.stringify({ site: activeSiteId.value, upstream: params.toString(), schedule: scheduleQuickFilter.value, groups: localFilters })
-}
-
-function optionLabel(options: { value: string; label: string }[], value: unknown) {
-  const text = String(value || '')
-  if (!text) return '未知'
-  return options.find((option) => option.value === text)?.label || text
 }
 
 function platformLabel(value: unknown) {
@@ -1208,11 +1215,6 @@ function goNextAccounts() {
   loadAccounts()
 }
 
-function accountName(account: Account) {
-  const extra = (account.extra || {}) as Record<string, unknown>
-  return String(account.name || account.email || extra.name || extra.email || account.id || '未命名账号')
-}
-
 function rememberAccountMeta(items: Account[]) {
   items.forEach((account) => {
     const id = accountID(account)
@@ -1228,10 +1230,6 @@ function accountMetaForIDs(ids: number[]) {
     if (value) meta[String(id)] = value
   })
   return meta
-}
-
-function accountID(account: Account) {
-  return String(account.id || '')
 }
 
 function toggleAccountSelection(account: Account) {
@@ -1315,30 +1313,6 @@ function clearAccountSelection() {
   selectedAccountIds.value = new Set()
 }
 
-function accountGroups(account: Account) {
-  const names = accountGroupEntries(account).map((group) => group.name)
-  return names.length ? names.join(' / ') : '未分组'
-}
-
-function accountNote(account: Account) {
-  const extra = (account.extra || {}) as Record<string, unknown>
-  const value = account.note ?? account.remark ?? account.description ?? extra.note ?? extra.remark ?? extra.description
-  const text = value === undefined || value === null ? '' : String(value).trim()
-  return text
-}
-
-function accountGroupPreview(account: Account) {
-  const groups = accountGroupEntries(account)
-  return {
-    items: groups.slice(0, 2),
-    extra: Math.max(0, groups.length - 2),
-  }
-}
-
-function groupPopoverKey(account: Account) {
-  return accountID(account) || accountName(account)
-}
-
 function toggleFloatingGroupPopover(account: Account, event: MouseEvent) {
   const key = groupPopoverKey(account)
   if (groupPopoverAccount.value && groupPopoverKey(groupPopoverAccount.value) === key) {
@@ -1367,26 +1341,6 @@ function handleDocumentClick(event: MouseEvent) {
   closeGroupPopover()
 }
 
-function accountGroupEntries(account: Account) {
-  const groups = Array.isArray(account.groups) ? account.groups : []
-  const accountGroups = Array.isArray(account.account_groups) ? account.account_groups : []
-  const entries = groups
-    .map((group: any) => ({ id: String(group?.id || '').trim(), name: String(group?.name || '').trim() }))
-    .concat(accountGroups.map((item: any) => ({ id: String(item?.group?.id || item?.group_id || '').trim(), name: String(item?.group?.name || '').trim() })))
-    .filter((group) => group.id || group.name)
-  const unique = new Map<string, { id: string; name: string }>()
-  entries.forEach((group) => {
-    const id = group.id || group.name
-    unique.set(id, { id, name: group.name || `分组 #${id}` })
-  })
-  return Array.from(unique.values())
-}
-
-function accountGroupIDs(account: Account) {
-  const ids = accountGroupEntries(account).map((group) => group.id).filter(Boolean)
-  return new Set(ids)
-}
-
 function groupState(id: string): GroupState {
   return groupFilterStates[id] || 'any'
 }
@@ -1398,12 +1352,6 @@ function setGroupState(id: string, state: GroupState) {
     return
   }
   groupFilterStates[id] = state
-}
-
-function groupStateLabel(state: GroupState) {
-  if (state === 'include') return '包含'
-  if (state === 'exclude') return '排除'
-  return '随意'
 }
 
 function addGroupFilter() {
@@ -1437,125 +1385,6 @@ function resetGroupFilters() {
   groupToAdd.value = ''
 }
 
-function accountProxy(account: Account) {
-  const proxy = account.proxy as Record<string, unknown> | undefined
-  if (!proxy) return account.proxy_id ? `代理 #${account.proxy_id}` : '无代理'
-  return String(proxy.name || proxy.id || account.proxy_id || '未知代理')
-}
-
-function accountPlatformLabel(account: Account) {
-  const parts = [platformLabel(account.platform), accountTypeLabel(account.type)]
-  return parts.filter((part) => part !== '未知').join(' / ') || '未知'
-}
-
-function accountStatusLabel(account: Account) {
-  return statusLabel(account.status)
-}
-
-function accountStatusTone(account: Account) {
-  const status = String(account.status || '').toLowerCase()
-  if (!status) return 'neutral'
-  if (['active', 'enabled', 'ready', 'ok', 'success'].includes(status)) return 'success'
-  if (['error', 'failed', 'disabled', 'blocked', 'inactive'].includes(status)) return 'danger'
-  if (['pending', 'testing', 'processing'].includes(status)) return 'warning'
-  return 'neutral'
-}
-
-function accountScheduleTone(account: Account) {
-  switch (accountScheduleKey(account)) {
-    case 'ready': return 'success'
-    case 'rate': return 'warning'
-    case 'overload': return 'info'
-    case 'temp':
-    case 'blocked': return 'danger'
-    default: return 'neutral'
-  }
-}
-
-function accountUsageShort(account: Account) {
-  const parts = accountUsageMetrics(account).map((metric) => `${metric.label} ${metric.text}`).filter((item) => !item.endsWith('未知'))
-  return parts.length ? parts.join(' / ') : '未知'
-}
-
-function accountUsageMetrics(account: Account) {
-  const extra = (account.extra || {}) as Record<string, unknown>
-  const primary = usagePercentValue(extra.codex_primary_used_percent ?? extra.codex_5h_used_percent)
-  const secondary = usagePercentValue(extra.codex_secondary_used_percent ?? extra.codex_7d_used_percent)
-  return [
-    { label: '5h', value: primary, text: usagePercentText(primary) },
-    { label: '7d', value: secondary, text: usagePercentText(secondary) },
-  ]
-}
-
-function accountLastUsedLabel(account: Account) {
-  return formatDateTime(account.last_used_at)
-}
-
-function accountSchedule(account: Account) {
-  if (account.temp_unschedulable_until) return '临时不可调度'
-  if (account.schedulable === false) return '不可调度'
-  if (account.overload_until) return '过载冷却'
-  if (account.rate_limit_reset_at) return '限流中'
-  return '可调度'
-}
-
-function accountScheduleKey(account: Account) {
-  if (account.temp_unschedulable_until) return 'temp'
-  if (account.schedulable === false) return 'blocked'
-  if (account.overload_until) return 'overload'
-  if (account.rate_limit_reset_at) return 'rate'
-  return 'ready'
-}
-
-function accountUsage(account: Account) {
-  const extra = (account.extra || {}) as Record<string, unknown>
-  const primary = extra.codex_primary_used_percent ?? extra.codex_5h_used_percent
-  const secondary = extra.codex_secondary_used_percent ?? extra.codex_7d_used_percent
-  return [primary !== undefined ? `短窗 ${primary}%` : '', secondary !== undefined ? `长窗 ${secondary}%` : ''].filter(Boolean).join(' / ') || '未知'
-}
-
-function displayValue(value: unknown) {
-  if (value === undefined || value === null || value === '') return '未知'
-  return String(value)
-}
-
-function accountErrorText(account: Account) {
-  return displayValue(account.error_message || account.error || account.last_error)
-}
-
-function accountUsageRows(account: Account) {
-  const extra = (account.extra || {}) as Record<string, unknown>
-  return [
-    ['5h 用量', extra.codex_primary_used_percent ?? extra.codex_5h_used_percent],
-    ['7d 用量', extra.codex_secondary_used_percent ?? extra.codex_7d_used_percent],
-    ['窗口开始', account.session_window_start],
-    ['窗口结束', account.session_window_end],
-    ['窗口状态', account.session_window_status],
-  ].map(([label, value]) => ({ label: String(label), value: value === undefined || value === null || value === '' ? '未知' : String(value) }))
-}
-
-function accountScheduleRows(account: Account) {
-  return [
-    ['调度状态', accountSchedule(account)],
-    ['Schedulable', account.schedulable === false ? 'false' : 'true'],
-    ['限流时间', formatDateTime(account.rate_limited_at)],
-    ['限流恢复', formatDateTime(account.rate_limit_reset_at)],
-    ['过载冷却', formatDateTime(account.overload_until)],
-    ['临时不可调度', formatDateTime(account.temp_unschedulable_until)],
-    ['临时原因', account.temp_unschedulable_reason],
-  ].map(([label, value]) => ({ label: String(label), value: displayValue(value) }))
-}
-
-function accountProxyRows(account: Account) {
-  const proxy = account.proxy as Record<string, unknown> | undefined
-  return [
-    ['代理', accountProxy(account)],
-    ['代理 ID', account.proxy_id],
-    ['代理名称', proxy?.name],
-    ['代理类型', proxy?.type],
-  ].map(([label, value]) => ({ label: String(label), value: displayValue(value) }))
-}
-
 function openAccountDetail(account: Account) {
   selectedAccount.value = account
   showAccountModal.value = true
@@ -1572,19 +1401,6 @@ function clearAccountFilters() {
   resetGroupFilters()
   accountPager.page = 1
   loadAccounts()
-}
-
-function redactAccountValue(key: string, value: unknown): unknown {
-  if (/credential|token|secret|password|cookie|key|authorization/i.test(key)) return '[已隐藏]'
-  if (Array.isArray(value)) return value.map((item) => redactAccountValue(key, item))
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [childKey, redactAccountValue(childKey, childValue)]))
-  }
-  return value
-}
-
-function accountDetailJSON(account: Account) {
-  return JSON.stringify(redactAccountValue('account', account), null, 2)
 }
 
 async function testSelectedAccounts() {

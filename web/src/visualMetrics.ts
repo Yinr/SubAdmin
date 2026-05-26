@@ -75,9 +75,9 @@ export function rankingWidth(actualCost: unknown, maxRankingCost: number) {
   return usagePercentWidth(Number(actualCost || 0) / maxRankingCost * 100)
 }
 
-export function concurrencyPercent(currentValue: unknown, maxValue: unknown) {
-  const current = Number(currentValue || 0)
-  const max = Number(maxValue || 0)
+export function concurrencyPercent(row: Record<string, unknown>) {
+  const current = Number(row.current_in_use || row.current_concurrency || 0)
+  const max = Number(row.max_capacity || row.concurrency || 0)
   if (!Number.isFinite(current) || !Number.isFinite(max) || max <= 0) return 0
   return usagePercentWidth(current / max * 100)
 }
