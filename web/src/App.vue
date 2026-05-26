@@ -4,6 +4,8 @@ import ExpandablePanel from './components/ExpandablePanel.vue'
 import ConcurrencyTable from './components/ConcurrencyTable.vue'
 import StatsTable from './components/StatsTable.vue'
 import ImportView from './views/ImportView.vue'
+import AuditView from './views/AuditView.vue'
+import DocsView from './views/DocsView.vue'
 import {
   accountDetailJSON,
   accountErrorText,
@@ -29,7 +31,7 @@ import {
   groupStateLabel,
   normalizeAccounts,
 } from './accountDisplay'
-import { api, textResource } from './apiClient'
+import { api } from './apiClient'
 import { accountStatusOptions, accountTypeOptions, optionLabel, platformOptions, privacyModeOptions } from './appOptions'
 import {
   formatDateInput,
@@ -76,8 +78,6 @@ const sites = ref<Site[]>([])
 const siteError = ref('')
 const accountError = ref('')
 const copyNotice = ref('')
-const docsError = ref('')
-const aiReference = ref('')
 const batchTestError = ref('')
 const batchRefreshError = ref('')
 const accounts = ref<Account[]>([])
@@ -88,7 +88,6 @@ const batchRefreshResult = ref<Record<string, unknown> | null>(null)
 const statistics = ref<Record<string, unknown> | null>(null)
 const batchTestJob = ref<JobRecord | null>(null)
 const recentJobs = ref<JobRecord[]>([])
-const auditLogs = ref<Record<string, unknown>[]>([])
 const batchTestScroll = ref<HTMLElement | null>(null)
 const batchRefreshScroll = ref<HTMLElement | null>(null)
 const selectedAccountIds = ref<Set<string>>(new Set())
@@ -105,7 +104,6 @@ const accountsLoading = ref(false)
 const groupsLoading = ref(false)
 const proxiesLoading = ref(false)
 const savingSite = ref(false)
-const docsLoading = ref(false)
 const statsLoading = ref(false)
 const userConcurrencyLoading = ref(false)
 const accountConcurrencyLoading = ref(false)
@@ -113,10 +111,8 @@ const batchTesting = ref(false)
 const batchRefreshing = ref(false)
 const batchCollecting = ref(false)
 const jobsLoading = ref(false)
-const auditLoading = ref(false)
 const activeView = ref<ViewMode>('stats')
 const statsError = ref('')
-const auditError = ref('')
 const confirmDialog = reactive({
   open: false,
   title: '',
@@ -391,18 +387,8 @@ async function logout() {
   activeView.value = 'stats'
 }
 
-async function showDocs() {
+function showDocs() {
   activeView.value = 'docs'
-  if (aiReference.value || docsLoading.value) return
-  docsError.value = ''
-  docsLoading.value = true
-  try {
-    aiReference.value = await textResource('docs/AI_REFERENCE.md')
-  } catch (error) {
-    docsError.value = error instanceof Error ? error.message : '加载文档失败'
-  } finally {
-    docsLoading.value = false
-  }
 }
 
 async function showStats() {
@@ -831,22 +817,8 @@ async function loadRecentJobs() {
   }
 }
 
-async function loadAuditLogs() {
-  auditError.value = ''
-  auditLoading.value = true
-  try {
-    const payload = await api<{ items: Record<string, unknown>[] }>('api/audit-logs')
-    auditLogs.value = payload.items || []
-  } catch (error) {
-    auditError.value = error instanceof Error ? error.message : '加载审计日志失败'
-  } finally {
-    auditLoading.value = false
-  }
-}
-
 function showAudit() {
   activeView.value = 'audit'
-  loadAuditLogs()
 }
 
 function showImport() {
@@ -1406,11 +1378,6 @@ function selectedTaskResultJSON() {
   return JSON.stringify(batchTestJob.value.result || {}, null, 2)
 }
 
-function auditSummaryText(value: unknown) {
-  if (!value || typeof value !== 'object') return '{}'
-  return JSON.stringify(value)
-}
-
 function waitForBatchPoll() {
   return new Promise((resolve) => {
     batchTestPollTimer = window.setTimeout(resolve, 1200)
@@ -1864,58 +1831,9 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-else-if="activeView === 'audit'" class="panel content-panel">
-        <div class="panel-head">
-          <div>
-            <h2>审计日志</h2>
-            <p class="muted">记录站点写操作、任务动作和导入预览摘要；敏感字段会脱敏。</p>
-          </div>
-          <button class="secondary" :disabled="auditLoading" @click="loadAuditLogs">{{ auditLoading ? '加载中...' : '刷新审计' }}</button>
-        </div>
-        <p v-if="auditError" class="error">{{ auditError }}</p>
-        <div class="result-scroll table-wrap jobs-scroll">
-          <table class="account-table result-table">
-            <thead><tr><th>ID</th><th>动作</th><th>站点</th><th>目标</th><th>请求摘要</th><th>结果摘要</th><th>时间</th></tr></thead>
-            <tbody>
-              <tr v-for="log in auditLogs" :key="String(log.id)">
-                <td>#{{ log.id }}</td>
-                <td>{{ log.action }}</td>
-                <td>{{ log.siteId || '全局' }}</td>
-                <td>{{ log.targetType }} · {{ log.targetCount || 0 }}</td>
-                <td><code>{{ auditSummaryText(log.requestSummary) }}</code></td>
-                <td><code>{{ auditSummaryText(log.resultSummary) }}</code></td>
-                <td>{{ formatDateTime(log.createdAt) }}</td>
-              </tr>
-              <tr v-if="!auditLogs.length"><td colspan="7" class="muted">暂无审计日志。</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <AuditView v-else-if="activeView === 'audit'" />
 
-      <section v-else-if="activeView === 'docs'" class="panel docs-panel">
-        <div class="panel-head">
-          <div>
-            <h2>API 文档</h2>
-            <p class="muted">这些文档通过 SubAdmin 登录态保护。不会自动注入 sub2api 管理员 Key。</p>
-          </div>
-          <button class="secondary" :disabled="docsLoading" @click="showDocs">{{ docsLoading ? '加载中...' : '刷新 AI Reference' }}</button>
-        </div>
-        <div class="docs-links">
-          <a class="button-link secondary" href="docs/" target="_blank" rel="noreferrer">打开 Swagger UI</a>
-          <a class="button-link secondary" href="docs/openapi.yaml" target="_blank" rel="noreferrer">查看 OpenAPI YAML</a>
-          <a class="button-link secondary" href="docs/AI_REFERENCE.md" target="_blank" rel="noreferrer">打开原始 AI Reference</a>
-        </div>
-        <p class="muted">Swagger UI 的 Try it out 仍需你手动填写上游管理员 Key；SubAdmin 不会把已保存站点 Key 注入浏览器。</p>
-        <p v-if="docsError" class="error">{{ docsError }}</p>
-        <p v-if="docsLoading" class="muted">正在加载 AI Reference...</p>
-        <section class="docs-reader" v-if="aiReference">
-          <div class="panel-head">
-            <h2>AI Reference</h2>
-            <button class="secondary" @click="copyText(aiReference, 'AI Reference')">复制全文</button>
-          </div>
-          <pre>{{ aiReference }}</pre>
-        </section>
-      </section>
+      <DocsView v-else-if="activeView === 'docs'" :copy-text="copyText" />
 
       <div v-if="activeView === 'accounts' || activeView === 'sites'" class="layout-grid" :class="{ 'single-column': activeView === 'accounts' }">
         <aside v-if="activeView === 'sites'" class="panel">
@@ -2550,10 +2468,6 @@ onUnmounted(() => {
 .mini-table th, .mini-table td { padding: 10px 12px; border-bottom: 1px solid rgba(148, 163, 184, 0.1); text-align: left; font-size: 13px; }
 .mini-table th { color: #c4b5fd; background: rgba(2, 6, 23, 0.28); }
 .mini-table td { color: #e2e8f0; }
-.docs-panel { display: grid; gap: 14px; }
-.docs-links { display: flex; flex-wrap: wrap; gap: 10px; }
-.docs-reader { display: grid; gap: 12px; margin-top: 8px; }
-.docs-reader pre { margin: 0; max-height: 620px; overflow: auto; padding: 16px; border-radius: 14px; background: rgba(2, 6, 23, 0.55); color: #dbeafe; line-height: 1.55; white-space: pre-wrap; }
 .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
 .refresh-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; }
 .eyebrow { margin: 0 0 8px; color: #c4b5fd; letter-spacing: 0.16em; text-transform: uppercase; font-size: 12px; }
@@ -2766,8 +2680,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .pager > * { width: 100%; justify-content: center; }
   .jump-label { grid-column: span 2; justify-content: space-between; }
   .jump-label input { width: 130px; }
-  .docs-links { display: grid; grid-template-columns: 1fr; }
-  .docs-reader pre { max-height: 520px; font-size: 12px; }
   .modal-mask { align-items: start; padding: 12px; overflow: auto; }
   .detail-card { max-height: none; }
   .detail-grid { grid-template-columns: 86px 1fr; gap: 8px 10px; }
