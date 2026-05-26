@@ -2654,7 +2654,13 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 	ranking, rankingStatus, rankingErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/dashboard/users-ranking", rankingQuery)
 	userConcurrency, userConcurrencyStatus, userConcurrencyErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/ops/user-concurrency", nil)
 	opsConcurrency, opsConcurrencyStatus, opsConcurrencyErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/ops/concurrency", nil)
-	if snapshotErr != nil && statsErr != nil && rankingErr != nil && userConcurrencyErr != nil && opsConcurrencyErr != nil {
+	activeAccountQuery := url.Values{}
+	activeAccountQuery.Set("status", "active")
+	activeAccountQuery.Set("page", "1")
+	activeAccountQuery.Set("page_size", "1")
+	activeAccountQuery.Set("lite", "true")
+	activeAccounts, activeAccountsStatus, activeAccountsErr := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/accounts", activeAccountQuery)
+	if snapshotErr != nil && statsErr != nil && rankingErr != nil && userConcurrencyErr != nil && opsConcurrencyErr != nil && activeAccountsErr != nil {
 		writeSiteError(w, snapshotErr)
 		return
 	}
@@ -2682,6 +2688,9 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 			"账号并发来自 ops/concurrency，依赖 sub2api Ops 实时监控开关。",
 		},
 	}
+	if total, ok := paginatedTotal(decodeJSONValue(activeAccounts)); ok {
+		result["activeStatusAccounts"] = total
+	}
 	if snapshotErr != nil {
 		result["snapshotError"] = snapshotErr.Error()
 	}
@@ -2697,8 +2706,41 @@ func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *si
 	if opsConcurrencyErr != nil {
 		result["opsConcurrencyError"] = opsConcurrencyErr.Error()
 	}
-	slog.InfoContext(r.Context(), "statistics loaded", "site_id", siteID, "start_date", startDate, "end_date", endDate, "granularity", granularity, "snapshot_status", snapshotStatus, "stats_status", statsStatus, "ranking_status", rankingStatus, "user_concurrency_status", userConcurrencyStatus, "account_concurrency_status", opsConcurrencyStatus)
+	if activeAccountsErr != nil {
+		result["activeStatusAccountsError"] = activeAccountsErr.Error()
+	}
+	slog.InfoContext(r.Context(), "statistics loaded", "site_id", siteID, "start_date", startDate, "end_date", endDate, "granularity", granularity, "snapshot_status", snapshotStatus, "stats_status", statsStatus, "ranking_status", rankingStatus, "user_concurrency_status", userConcurrencyStatus, "account_concurrency_status", opsConcurrencyStatus, "active_accounts_status", activeAccountsStatus)
 	writeJSON(w, http.StatusOK, result)
+}
+
+func paginatedTotal(value any) (int64, bool) {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	if total, ok := numberAsInt64(object["total"]); ok {
+		return total, true
+	}
+	if data, ok := object["data"]; ok {
+		return paginatedTotal(data)
+	}
+	return 0, false
+}
+
+func numberAsInt64(value any) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		return int64(v), true
+	case json.Number:
+		parsed, err := v.Int64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func writeSiteUserConcurrency(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {

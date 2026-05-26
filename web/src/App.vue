@@ -501,16 +501,13 @@ async function loadStatistics() {
       end_date: statsRange.endDate,
       granularity: statsRange.granularity,
     })
-    const [statsPayload, activeAccountsPayload] = await Promise.all([
-      api<Record<string, unknown>>(`api/sites/${activeSiteId.value}/statistics?${params.toString()}`),
-      api<any>(`api/sites/${activeSiteId.value}/accounts?status=active&page=1&page_size=1&lite=true`).catch(() => null),
-    ])
+    const statsPayload = await api<Record<string, unknown>>(`api/sites/${activeSiteId.value}/statistics?${params.toString()}`)
     const stats = unwrapAPIData(statsPayload.stats)
     statistics.value = {
       ...statsPayload,
       stats: {
         ...stats,
-        active_status_accounts: activeAccountsPayload ? payloadTotal(activeAccountsPayload) : stats.normal_accounts,
+        active_status_accounts: statsPayload.activeStatusAccounts ?? stats.normal_accounts,
       },
     }
   } catch (error) {
