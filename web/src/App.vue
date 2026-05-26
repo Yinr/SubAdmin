@@ -1636,9 +1636,9 @@ onUnmounted(() => {
                       <path :d="chartPath(recentTrend, 'total_tokens')" class="chart-line tokens" />
                       <path :d="chartPath(recentTrend, 'requests')" class="chart-line requests" />
                       <g v-if="chartHoverPoint && chartHoverIndex !== null" class="chart-hover">
-                        <line :x1="chartX(chartHoverIndex)" y1="0" :x2="chartX(chartHoverIndex)" y2="170" class="chart-hover-line" />
-                        <circle :cx="chartX(chartHoverIndex)" :cy="chartY(chartHoverPoint, 'total_tokens')" r="4" class="chart-dot tokens" />
-                        <circle :cx="chartX(chartHoverIndex)" :cy="chartY(chartHoverPoint, 'requests')" r="4" class="chart-dot requests" />
+                        <line :x1="chartX(chartHoverIndex, recentTrend.length)" y1="0" :x2="chartX(chartHoverIndex, recentTrend.length)" y2="170" class="chart-hover-line" />
+                        <circle :cx="chartX(chartHoverIndex, recentTrend.length)" :cy="chartY(chartHoverPoint, 'total_tokens', maxTrendTokens)" r="4" class="chart-dot tokens" />
+                        <circle :cx="chartX(chartHoverIndex, recentTrend.length)" :cy="chartY(chartHoverPoint, 'requests', maxTrendRequests)" r="4" class="chart-dot requests" />
                       </g>
                     </g>
                     <foreignObject v-if="chartHoverPoint" x="350" y="18" width="230" height="90">
@@ -1721,7 +1721,7 @@ onUnmounted(() => {
                   <tr v-for="user in statisticsRanking" :key="String(user.user_id)">
                     <td class="ranking-name">{{ userDisplayName(user) }}</td>
                     <td class="ranking-usage">
-                      <div class="usage-bar-shell"><div class="usage-bar" :style="{ width: `${rankingWidth(user)}%` }"></div></div>
+                      <div class="usage-bar-shell"><div class="usage-bar" :style="{ width: `${rankingWidth(user.actual_cost, maxRankingCost)}%` }"></div></div>
                       <span>{{ statCost(user, 'actual_cost') }} <b>·</b> {{ tokenValue(user, 'tokens') }}</span>
                     </td>
                   </tr>
