@@ -2462,6 +2462,27 @@ onUnmounted(() => {
                 <p class="muted">这些设置会应用到预览和最终导入。</p>
               </div>
             </div>
+            <div class="import-subsection import-template-section">
+              <div class="subsection-head">
+                <div>
+                  <h3>导入模板</h3>
+                  <p class="muted">选择已有模板快速套用；模板不保存账号凭据。</p>
+                </div>
+              </div>
+              <div class="active-filter-chips template-picker">
+                <button v-for="template in importTemplates" :key="String(template.id)" type="button" class="filter-chip" :class="{ danger: importTemplateDeleteMode }" @click="importTemplateDeleteMode ? deleteImportTemplate(template) : applyImportTemplate(template)">{{ importTemplateDeleteMode ? '删除 ' : '' }}{{ template.name }}</button>
+                <span v-if="!importTemplates.length" class="muted">暂无模板。</span>
+              </div>
+              <details class="advanced-block template-manager">
+                <summary>模板管理</summary>
+                <div class="filter-grid template-manager-grid">
+                  <label>模板名称<input v-model="importTemplateName" placeholder="例如 Anthropic OAuth 默认设置" /></label>
+                  <button type="button" :disabled="!importTemplateName.trim()" @click="saveImportTemplate">保存当前设置</button>
+                  <button type="button" class="secondary" :disabled="importTemplatesLoading" @click="loadImportTemplates">{{ importTemplatesLoading ? '加载中...' : '刷新模板' }}</button>
+                  <button type="button" class="secondary" :class="{ danger: importTemplateDeleteMode }" @click="importTemplateDeleteMode = !importTemplateDeleteMode">{{ importTemplateDeleteMode ? '退出删除' : '删除模板' }}</button>
+                </div>
+              </details>
+            </div>
             <div class="filter-grid import-basic-grid">
               <label>代理
                 <select v-model="importForm.proxyId" :disabled="proxiesLoading">
@@ -2501,23 +2522,6 @@ onUnmounted(() => {
             </div>
           </section>
         </div>
-        <section class="result-panel import-template-panel">
-          <div class="panel-head">
-            <div>
-              <h2>导入模板</h2>
-              <p class="muted">保存和套用预览默认设置；模板不会保存账号凭据。</p>
-            </div>
-            <div class="actions"><button class="secondary" :disabled="importTemplatesLoading" @click="loadImportTemplates">{{ importTemplatesLoading ? '加载中...' : '刷新模板' }}</button><button class="secondary" :class="{ danger: importTemplateDeleteMode }" @click="importTemplateDeleteMode = !importTemplateDeleteMode">{{ importTemplateDeleteMode ? '退出删除' : '删除模板' }}</button></div>
-          </div>
-          <div class="filter-grid">
-            <label>模板名称<input v-model="importTemplateName" placeholder="例如 Anthropic OAuth 默认设置" /></label>
-            <button type="button" :disabled="!importTemplateName.trim()" @click="saveImportTemplate">保存当前设置为模板</button>
-          </div>
-          <div class="active-filter-chips">
-            <button v-for="template in importTemplates" :key="String(template.id)" type="button" class="filter-chip" :class="{ danger: importTemplateDeleteMode }" @click="importTemplateDeleteMode ? deleteImportTemplate(template) : applyImportTemplate(template)">{{ importTemplateDeleteMode ? '删除 ' : '' }}{{ template.name }}</button>
-            <span v-if="!importTemplates.length" class="muted">暂无模板。</span>
-          </div>
-        </section>
         <section v-if="importPreview" class="batch-results result-panel">
           <div class="panel-head">
             <div>
@@ -3404,15 +3408,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .import-input-card textarea { min-height: 300px; }
 .import-basic-grid { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
 .import-subsection { display: grid; gap: 10px; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.12); border-radius: 14px; background: rgba(2, 6, 23, 0.18); }
-.import-subsection p, .import-template-panel p { margin: 0; }
+.import-subsection p { margin: 4px 0 0; }
 .subsection-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
 .subsection-head h3 { margin: 0; }
+.import-template-section { border-color: rgba(125, 211, 252, 0.18); background: linear-gradient(135deg, rgba(12, 74, 110, 0.18), rgba(2, 6, 23, 0.18)); }
+.template-picker { margin-bottom: 2px; }
+.template-manager { margin-top: 0; padding: 10px; background: rgba(15, 23, 42, 0.34); }
+.template-manager-grid { grid-template-columns: minmax(180px, 1fr) repeat(3, auto); gap: 10px; }
 .compact-add-row { margin-top: 0; }
 .import-actions { align-items: center; padding-top: 2px; }
 .import-site-note { flex: 1 1 220px; }
-.import-template-panel { margin-top: 18px; background: linear-gradient(135deg, rgba(12, 74, 110, 0.18), rgba(2, 6, 23, 0.24)); }
-.import-template-panel .panel-head { margin-bottom: 12px; }
-.import-template-panel .filter-grid { grid-template-columns: minmax(220px, 1fr) auto; gap: 10px; }
 .confirm-card { width: min(560px, calc(100vw - 32px)); }
 .filter-chip span { margin-left: 6px; color: #93c5fd; }
 .query-notice { margin: 6px 0 12px; }
@@ -3536,8 +3541,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .overview-card strong { font-size: 18px; }
   .overview-card p { font-size: 12px; }
   .filter-grid, .advanced-grid { grid-template-columns: 1fr; }
-  .import-basic-grid, .import-template-panel .filter-grid { grid-template-columns: 1fr; }
-  .import-template-panel { margin-top: 14px; }
+  .import-basic-grid, .template-manager-grid { grid-template-columns: 1fr; }
   .import-site-note { flex-basis: auto; }
   .section-card, .local-filter, .batch-toolbar { padding: 12px; border-radius: 14px; }
   .panel-head { align-items: flex-start; flex-direction: column; }
