@@ -815,7 +815,7 @@ function statValue(source: Record<string, unknown>, key: string) {
 }
 
 function statisticsActiveAccounts() {
-  return statValue(statisticsStats.value, 'active_status_accounts')
+  return statValue({ value: statistics.value?.activeStatusAccounts ?? statisticsStats.value.normal_accounts }, 'value')
 }
 
 function compactNumber(value: unknown) {
