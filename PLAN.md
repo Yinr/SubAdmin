@@ -13,12 +13,12 @@ The current product focus is safe read-only management, low-risk account mainten
 - Use HttpOnly session cookies for SubAdmin login sessions.
 - Store only session token hashes in SQLite.
 - Redact sensitive upstream account fields before returning account data to the browser.
-- Keep high-risk account write operations disabled until preview, confirmation, jobs, and audit logs exist.
+- Keep high-risk account write operations behind preview, explicit confirmation, Jobs, and audit logs.
 - Keep batch test response logs opt-in only and write them under `SUBADMIN_LOG_DIR`.
 
 ## Current Status
 
-Status: usable for safe read-only management and low-risk account maintenance.
+Status: usable for safe read-only management, low-risk account maintenance, and confirmed account import workflows.
 
 Implemented capabilities:
 
@@ -26,7 +26,7 @@ Implemented capabilities:
 - SQLite stores sites, sessions, app settings, import-template schema, jobs, and audit-log schema.
 - Single-secret login uses HttpOnly session cookies and hashed session tokens.
 - Site management supports encrypted sub2api admin-key storage, CRUD, default-site selection, and connection tests.
-- Top-level navigation includes Statistics, Accounts, Sites, Jobs, and Docs.
+- Top-level navigation includes Statistics, Accounts, Import, Jobs, Audit, Sites, and Docs.
 - Account listing is proxied server-side and sensitive fields are redacted before browser responses.
 - Account filters support upstream query filters plus local current-page group/scheduling filters.
 - Account UI supports desktop tables, mobile cards, detail modal, badges, usage rows, copy helpers, and batch selection.
@@ -35,10 +35,11 @@ Implemented capabilities:
 - Jobs view lists recent jobs, reopens batch-test/token-refresh results, retries failed items, and cancels queued/running jobs.
 - Statistics dashboard uses real upstream dashboard and Ops endpoints, defaults to 24h/hourly, and supports isolated refresh for user/account concurrency panels.
 - Application logs use structured JSON Lines with configurable level, request IDs, and simple file rotation under `SUBADMIN_LOG_DIR`.
-- Import page supports pasted text or small files, parses known account-shaped content server-side, and returns a sanitized preview. Confirmed imports run through Jobs and call sub2api's `/api/v1/admin/accounts/batch`; selected model lists are written as account `credentials.model_mapping` identity mappings.
+- Import page supports pasted text or small files, parses known account-shaped content server-side, and returns a sanitized preview. Confirmed imports run through Jobs and call sub2api's `/api/v1/admin/accounts/batch`; selected model lists are written as account `credentials.model_mapping` identity mappings. Real multi-batch imports have been exercised successfully.
 - Import templates can save and apply non-sensitive preview defaults.
 - Audit logs record site writes, job actions, and import preview summaries; the Audit page lists recent audit records.
 - Protected OpenAPI, Swagger UI, and AI reference docs are available inside the logged-in UI.
+- Frontend structure now separates top-level App orchestration from Import, Audit, and Docs views, with shared helpers for API calls, formatting, visual metrics, import settings, and account display.
 
 ## Completed Areas
 
@@ -50,6 +51,8 @@ The following areas are complete for the current scope and should only change fo
 - Low-risk batch maintenance: account testing and token refresh through Jobs.
 - Jobs foundation: persisted job rows, progress/result JSON, retry failed, cancel queued/running, restart cleanup.
 - Statistics: real dashboard/Ops data only, no mock-only fields.
+- Confirmed account import: preview, explicit confirmation, persisted Jobs, batch upstream creation, audit logging, and non-sensitive templates.
+- Read-only audit/docs pages: audit log list and protected documentation view.
 - Protected docs: OpenAPI, Swagger UI, AI reference.
 
 Keep completed implementation details out of this plan unless they affect future design decisions.
@@ -65,7 +68,7 @@ Keep completed implementation details out of this plan unless they affect future
 
 ## Current Import Scope
 
-Import starts with server-side preview, then requires explicit target-site confirmation before creating a persisted Job.
+Import starts with server-side preview, then requires explicit target-site confirmation before creating a persisted Job. This workflow has been used successfully for multiple real import batches; recent logs show successful `import_accounts` jobs including batches of 103 accounts and smaller follow-up batches.
 
 Current scope:
 
@@ -81,8 +84,9 @@ Current scope:
 
 ### High-Risk Account Operations
 
-- Keep disabled until preview, confirmation, Jobs, and audit logs are all in place.
+- Keep new high-risk operations disabled until preview, confirmation, Jobs, and audit logs are all in place.
 - Add operations incrementally and only with clear rollback/error semantics.
+- Existing confirmed import execution remains enabled because it now satisfies the preview/confirmation/Jobs/audit baseline.
 
 ## Hardening Backlog
 
@@ -91,9 +95,11 @@ Current scope:
 - Add targeted backend tests for auth, encryption, redaction, proxy behavior, Jobs, and import preview parsing.
 - Add upload size and batch size limits for import preview.
 - Improve operational error messages around upstream timeouts and partial failures.
+- Improve import job result summaries when upstream returns partial failures or non-standard batch responses.
 - Revisit log rotation/retention policy if long-running deployments need time-based retention or compression.
 - Refine dense UI areas only when concrete usability issues appear.
+- Continue frontend view extraction only when it clearly reduces risk; defer splitting the Accounts view until account workflows stabilize further.
 
 ## Immediate Next Step
 
-Polish confirmed import result display and failure diagnostics after real-world import trials.
+Run a focused regression pass after the recent frontend view split, then harden import failure diagnostics only when real failure cases or unclear upstream responses appear.
