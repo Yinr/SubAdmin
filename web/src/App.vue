@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import ExpandablePanel from './components/ExpandablePanel.vue'
 import ConcurrencyTable from './components/ConcurrencyTable.vue'
 import StatsTable from './components/StatsTable.vue'
+import { api, textResource } from './apiClient'
 import { accountStatusOptions, accountTypeOptions, platformOptions, privacyModeOptions } from './appOptions'
 import {
   applyTemplateToImportForm,
@@ -20,6 +21,16 @@ import {
   splitImportModelTags,
 } from './importSettings'
 import type { ImportPreviewItem } from './importSettings'
+import {
+  compactNumber,
+  formatDateInput,
+  formatDateTime,
+  payloadTotal,
+  statCost,
+  statValue,
+  tokenValue,
+  unwrapAPIData,
+} from './formatters'
 
 type Site = {
   id: number
@@ -38,7 +49,6 @@ type Group = Record<string, unknown>
 type JobRecord = Record<string, unknown>
 type GroupState = 'any' | 'include' | 'exclude'
 type ViewMode = 'stats' | 'accounts' | 'import' | 'jobs' | 'audit' | 'sites' | 'docs'
-type ApiOptions = RequestInit & { timeoutMs?: number }
 type ImportPreview = {
   items: ImportPreviewItem[]
   warnings: string[]
@@ -362,43 +372,6 @@ const dashboardStats = computed(() => {
   }
 })
 
-async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
-  const { timeoutMs, signal, ...fetchOptions } = options
-  const controller = new AbortController()
-  const timeout = typeof timeoutMs === 'number' && timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : null
-  if (signal) {
-    if (signal.aborted) controller.abort()
-    else signal.addEventListener('abort', () => controller.abort(), { once: true })
-  }
-  try {
-    const res = await fetch(path, {
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', ...(fetchOptions.headers || {}) },
-      ...fetchOptions,
-      signal: controller.signal,
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(data.error || '请求失败')
-    return data as T
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('请求超时，请稍后重试或缩小筛选范围')
-    }
-    if (error instanceof TypeError) {
-      throw new Error('网络连接中断，请刷新后重试')
-    }
-    throw error
-  } finally {
-    if (timeout !== null) window.clearTimeout(timeout)
-  }
-}
-
-async function textResource(path: string): Promise<string> {
-  const res = await fetch(path, { credentials: 'same-origin' })
-  if (!res.ok) throw new Error('加载失败')
-  return res.text()
-}
-
 async function refreshMe() {
   const data = await api<{ authenticated: boolean; expiresAt?: string }>('api/auth/me')
   authed.value = data.authenticated
@@ -524,10 +497,6 @@ function addDays(date: Date, days: number) {
   const result = new Date(date)
   result.setDate(result.getDate() + days)
   return result
-}
-
-function formatDateInput(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
 function setStatsPreset(preset: string) {
@@ -743,10 +712,6 @@ function currentFilteredIDsCacheKey() {
   return JSON.stringify({ site: activeSiteId.value, upstream: params.toString(), schedule: scheduleQuickFilter.value, groups: localFilters })
 }
 
-function payloadTotal(payload: any) {
-  return Number(payload.total || payload.data?.total || 0)
-}
-
 function optionLabel(options: { value: string; label: string }[], value: unknown) {
   const text = String(value || '')
   if (!text) return '未知'
@@ -769,42 +734,8 @@ function privacyModeLabel(value: unknown) {
   return optionLabel(privacyModeOptions, value)
 }
 
-function unwrapAPIData(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object') return {}
-  const raw = value as Record<string, unknown>
-  if (raw.data && typeof raw.data === 'object') return raw.data as Record<string, unknown>
-  return raw
-}
-
-function statValue(source: Record<string, unknown>, key: string) {
-  const value = source[key]
-  if (value === undefined || value === null || value === '') return '暂无'
-  if (typeof value === 'number') return value.toLocaleString('zh-CN')
-  return String(value)
-}
-
 function statisticsActiveAccounts() {
   return statValue({ value: statistics.value?.activeStatusAccounts ?? statisticsStats.value.normal_accounts }, 'value')
-}
-
-function compactNumber(value: unknown) {
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) return '暂无'
-  const abs = Math.abs(numeric)
-  if (abs >= 1_000_000_000) return `${(numeric / 1_000_000_000).toFixed(2)}B`
-  if (abs >= 1_000_000) return `${(numeric / 1_000_000).toFixed(2)}M`
-  if (abs >= 1_000) return `${(numeric / 1_000).toFixed(2)}K`
-  return numeric.toLocaleString('zh-CN')
-}
-
-function tokenValue(source: Record<string, unknown>, key: string) {
-  return compactNumber(source[key])
-}
-
-function statCost(source: Record<string, unknown>, key: string) {
-  const value = Number(source[key])
-  if (!Number.isFinite(value)) return '暂无'
-  return `$${value.toFixed(2)}`
 }
 
 function refreshTimeLabel() {
@@ -1696,21 +1627,6 @@ function accountProxyRows(account: Account) {
     ['代理名称', proxy?.name],
     ['代理类型', proxy?.type],
   ].map(([label, value]) => ({ label: String(label), value: displayValue(value) }))
-}
-
-function formatDateTime(value: unknown) {
-  if (!value) return '未知'
-  let date: Date
-  if (typeof value === 'number') {
-    date = new Date(value < 1_000_000_000_000 ? value * 1000 : value)
-  } else if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
-    const numeric = Number(value)
-    date = new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric)
-  } else {
-    date = new Date(String(value))
-  }
-  if (Number.isNaN(date.getTime())) return String(value)
-  return date.toLocaleString('zh-CN', { hour12: false })
 }
 
 function openAccountDetail(account: Account) {
