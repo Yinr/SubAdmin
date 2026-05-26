@@ -2444,43 +2444,62 @@ onUnmounted(() => {
           <button class="secondary" type="button" @click="clearImportPreview">清空</button>
         </div>
         <p v-if="importError" class="error">{{ importError }}</p>
-        <div class="form-block import-form">
-          <label>粘贴账号内容<textarea v-model="importForm.text" rows="10" placeholder="支持 JSON、JSON 数组、accounts 包装对象，以及常见 key=value / key: value 行格式。"></textarea></label>
-          <div class="filter-grid">
+        <div class="import-workspace">
+          <section class="section-card import-input-card">
+            <div class="section-title">
+              <div>
+                <h3>账号内容</h3>
+                <p class="muted">粘贴内容或选择文件，预览阶段不会写入上游。</p>
+              </div>
+            </div>
+            <label>粘贴账号内容<textarea v-model="importForm.text" rows="12" placeholder="支持 JSON、JSON 数组、accounts 包装对象，以及常见 key=value / key: value 行格式。"></textarea></label>
             <label>选择文件<input type="file" accept=".json,.txt,.yaml,.yml,.csv" @change="handleImportFile" /></label>
-            <label>代理
-              <select v-model="importForm.proxyId" :disabled="proxiesLoading">
-                <option value="">不指定代理</option>
-                <option v-for="proxy in proxyOptions" :key="proxy.id" :value="proxy.id">{{ proxy.name }}</option>
-              </select>
-            </label>
-            <label>优先级<input v-model="importForm.priority" type="number" placeholder="可选" /></label>
-            <label>并发<input v-model="importForm.concurrency" type="number" placeholder="可选" /></label>
-            <label>命名前缀<input v-model="importForm.namePrefix" placeholder="可选，支持 {date}，如 import-{date}-" /></label>
-          </div>
-          <div class="section-card compact-section import-setting-card">
-            <h3>分组 <button type="button" class="mini inline-refresh" :disabled="groupsLoading" @click="loadGroups">{{ groupsLoading ? '刷新中...' : '刷新分组' }}</button></h3>
-            <div class="active-filter-chips tag-picker">
-              <button v-for="group in importGroupOptions" :key="group.id" type="button" class="filter-chip" :class="{ active: importForm.groups.includes(group.id) }" @click="toggleImportGroup(group.id)">{{ group.name }}</button>
-              <span v-if="!importGroupOptions.length" class="muted">暂无可选分组。</span>
+          </section>
+          <section class="section-card import-settings-card">
+            <div class="section-title">
+              <div>
+                <h3>导入设置</h3>
+                <p class="muted">这些设置会应用到预览和最终导入。</p>
+              </div>
             </div>
-            <p class="muted">只允许选择上游已有分组；未选择时使用上游默认分组逻辑。</p>
-          </div>
-          <div class="section-card compact-section import-setting-card">
-            <h3>模型</h3>
-            <div class="active-filter-chips tag-picker">
-              <button v-for="model in importModelOptions" :key="model" type="button" class="filter-chip" :class="{ active: importForm.models.includes(model) }" @click="toggleImportModel(model)">{{ model }}<span v-if="customImportModels.includes(model)" @click.stop="removeImportModelTag(model)">×</span></button>
+            <div class="filter-grid import-basic-grid">
+              <label>代理
+                <select v-model="importForm.proxyId" :disabled="proxiesLoading">
+                  <option value="">不指定代理</option>
+                  <option v-for="proxy in proxyOptions" :key="proxy.id" :value="proxy.id">{{ proxy.name }}</option>
+                </select>
+              </label>
+              <label>命名前缀<input v-model="importForm.namePrefix" placeholder="可选，支持 {date}，如 import-{date}-" /></label>
+              <label>优先级<input v-model="importForm.priority" type="number" placeholder="可选" /></label>
+              <label>并发<input v-model="importForm.concurrency" type="number" placeholder="可选" /></label>
             </div>
-            <div class="group-add-row">
-              <input v-model="newImportModelTag" placeholder="输入新模型，多个可用逗号或空格分隔" @keyup.enter="addImportModelTag" />
-              <button type="button" class="secondary" @click="addImportModelTag">添加模型</button>
+            <div class="import-subsection">
+              <div class="subsection-head">
+                <h3>分组</h3>
+                <button type="button" class="mini inline-refresh" :disabled="groupsLoading" @click="loadGroups">{{ groupsLoading ? '刷新中...' : '刷新分组' }}</button>
+              </div>
+              <div class="active-filter-chips tag-picker">
+                <button v-for="group in importGroupOptions" :key="group.id" type="button" class="filter-chip" :class="{ active: importForm.groups.includes(group.id) }" @click="toggleImportGroup(group.id)">{{ group.name }}</button>
+                <span v-if="!importGroupOptions.length" class="muted">暂无可选分组。</span>
+              </div>
+              <p class="muted">只允许选择上游已有分组；未选择时使用上游默认分组逻辑。</p>
             </div>
-          </div>
-          <div class="form-actions">
-            <button type="button" :disabled="importLoading || !activeSiteId" @click="previewImport(1)">{{ importLoading ? '解析中...' : '生成预览' }}</button>
-            <button type="button" class="danger" :disabled="importExecuting || importLoading || !importPreview || Number(importPreview.summary?.invalid || 0) > 0" @click="executeImportAccounts">{{ importExecuting ? '提交中...' : '确认导入' }}</button>
-            <span class="muted">当前站点：{{ activeSite?.name || '未选择' }}<template v-if="importForm.filename"> · 文件：{{ importForm.filename }}</template></span>
-          </div>
+            <div class="import-subsection">
+              <div class="subsection-head"><h3>模型</h3></div>
+              <div class="active-filter-chips tag-picker">
+                <button v-for="model in importModelOptions" :key="model" type="button" class="filter-chip" :class="{ active: importForm.models.includes(model) }" @click="toggleImportModel(model)">{{ model }}<span v-if="customImportModels.includes(model)" @click.stop="removeImportModelTag(model)">×</span></button>
+              </div>
+              <div class="group-add-row compact-add-row">
+                <input v-model="newImportModelTag" placeholder="输入新模型，多个可用逗号或空格分隔" @keyup.enter="addImportModelTag" />
+                <button type="button" class="secondary" @click="addImportModelTag">添加模型</button>
+              </div>
+            </div>
+            <div class="form-actions import-actions">
+              <button type="button" :disabled="importLoading || !activeSiteId" @click="previewImport(1)">{{ importLoading ? '解析中...' : '生成预览' }}</button>
+              <button type="button" class="danger" :disabled="importExecuting || importLoading || !importPreview || Number(importPreview.summary?.invalid || 0) > 0" @click="executeImportAccounts">{{ importExecuting ? '提交中...' : '确认导入' }}</button>
+              <span class="muted import-site-note">当前站点：{{ activeSite?.name || '未选择' }}<template v-if="importForm.filename"> · 文件：{{ importForm.filename }}</template></span>
+            </div>
+          </section>
         </div>
         <section class="result-panel import-template-panel">
           <div class="panel-head">
@@ -3380,7 +3399,20 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .filter-chip { padding: 6px 10px; border-radius: 999px; background: rgba(59, 130, 246, 0.14); color: #dbeafe; font-size: 12px; }
 .filter-chip.active { background: linear-gradient(135deg, rgba(124, 58, 237, 0.9), rgba(37, 99, 235, 0.86)); color: #fff; }
 .tag-picker .filter-chip { border: 1px solid rgba(147, 197, 253, 0.16); }
-.import-setting-card { background: linear-gradient(135deg, rgba(30, 41, 59, 0.68), rgba(2, 6, 23, 0.28)); }
+.import-workspace { display: grid; grid-template-columns: minmax(320px, 1.08fr) minmax(340px, 0.92fr); gap: 16px; align-items: start; }
+.import-input-card, .import-settings-card { margin: 0; background: linear-gradient(135deg, rgba(30, 41, 59, 0.68), rgba(2, 6, 23, 0.28)); }
+.import-input-card textarea { min-height: 300px; }
+.import-basic-grid { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
+.import-subsection { display: grid; gap: 10px; padding: 12px; border: 1px solid rgba(148, 163, 184, 0.12); border-radius: 14px; background: rgba(2, 6, 23, 0.18); }
+.import-subsection p, .import-template-panel p { margin: 0; }
+.subsection-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.subsection-head h3 { margin: 0; }
+.compact-add-row { margin-top: 0; }
+.import-actions { align-items: center; padding-top: 2px; }
+.import-site-note { flex: 1 1 220px; }
+.import-template-panel { margin-top: 18px; background: linear-gradient(135deg, rgba(12, 74, 110, 0.18), rgba(2, 6, 23, 0.24)); }
+.import-template-panel .panel-head { margin-bottom: 12px; }
+.import-template-panel .filter-grid { grid-template-columns: minmax(220px, 1fr) auto; gap: 10px; }
 .confirm-card { width: min(560px, calc(100vw - 32px)); }
 .filter-chip span { margin-left: 6px; color: #93c5fd; }
 .query-notice { margin: 6px 0 12px; }
@@ -3485,6 +3517,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .modal-actions { justify-content: flex-end; }
 @media (max-width: 900px) {
   .layout-grid { grid-template-columns: 1fr; }
+  .import-workspace { grid-template-columns: 1fr; }
+  .import-input-card textarea { min-height: 240px; }
   .topbar { align-items: flex-start; flex-direction: column; }
   .topbar-actions { width: 100%; justify-content: flex-start; }
   .overview-card.wide, .stat-panel-card.wide-card { grid-column: auto; }
@@ -3502,6 +3536,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .overview-card strong { font-size: 18px; }
   .overview-card p { font-size: 12px; }
   .filter-grid, .advanced-grid { grid-template-columns: 1fr; }
+  .import-basic-grid, .import-template-panel .filter-grid { grid-template-columns: 1fr; }
+  .import-template-panel { margin-top: 14px; }
+  .import-site-note { flex-basis: auto; }
   .section-card, .local-filter, .batch-toolbar { padding: 12px; border-radius: 14px; }
   .panel-head { align-items: flex-start; flex-direction: column; }
   .panel-head > button, .panel-head .actions { width: 100%; }
