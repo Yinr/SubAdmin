@@ -6,28 +6,30 @@ SubAdmin 是一个面向 sub2api 的轻量级管理面板，目标是提供更�
 
 ## 当前状态
 
-项目当前已经可用于安全的只读管理和低风险账号维护。目前已经具备：
+项目当前已经可用于安全的只读管理、低风险账号维护和确认式账号导入。目前已经具备：
 
 - 单密钥登录和 HttpOnly Session Cookie
-- 多 sub2api 站点管理、默认站点、连接测试
+- 多 sub2api 站点管理、默认站点、CRUD 和连接测试
 - sub2api 管理员 Key 服务端加密保存
 - 账号列表查询、筛选、脱敏详情和移动端卡片展示
 - 批量账号检测和批量令牌刷新，均已接入持久化任务
-- 导入页支持粘贴/小文件账号内容并生成安全预览；确认站点信息后可通过任务批量导入账号
+- 导入页支持粘贴/小文件账号内容并生成安全预览；预览会返回识别结果、缺失字段、警告和疑似重复风险；确认站点信息后可通过任务批量导入账号
 - 导入命名前缀支持 `{date}` 占位符，按 `YYYYMMDD` 渲染
 - 导入执行使用 sub2api `/api/v1/admin/accounts/batch`，导入模型列表统一写入账号 `credentials.model_mapping`
-- 导入模板支持保存和套用非敏感默认设置，不保存账号凭据
-- 任务页支持查看任务历史、进度、结果详情、运行中任务取消和失败项重试
+- 导入模板支持保存、覆盖、删除和套用非敏感默认设置，不保存账号凭据
+- 任务页支持查看任务历史、进度、结果详情、运行中任务取消，以及批量检测/批量刷新任务的失败项重试
 - 审计页支持查看站点写操作、任务动作和导入摘要
-- 统计页默认展示近 24 小时数据，用户并发和账号并发可单独刷新
-- 统计页、账号页、站点页、任务页、文档页的顶层导航
+- 统计页默认展示近 24 小时数据，使用真实 upstream dashboard 和 Ops 数据，用户并发和账号并发可单独刷新
+- 统计页、账号页、导入页、任务页、审计页、站点页、文档页的顶层导航
 - 受保护的 OpenAPI、Swagger UI 和 AI Reference 文档
 
-导入执行前会强制展示目标站点信息并要求确认；SubAdmin 后端负责代发上游写请求，浏览器不接触 sub2api 管理员 Key。
+导入执行前会强制展示目标站点信息并要求确认；导入任务只保存安全摘要，不会把上游账号凭据写入任务输入、任务结果、审计日志或浏览器存储。SubAdmin 后端负责代发上游写请求，浏览器不接触 sub2api 管理员 Key。
 
 下一步重点：
 
+- 最近前端视图拆分后的聚焦回归验证
 - 继续打磨导入结果展示和失败定位
+- 补后端 targeted tests，包括认证、加密、脱敏、代理、Jobs 和导入解析
 - 继续保持浏览器不接触 sub2api 管理员 Key
 
 ## 技术栈
@@ -88,6 +90,8 @@ subAdmin/
 | `SUBADMIN_LOG_LEVEL` | `info` | 应用日志等级，支持 `debug`、`info`、`warn`、`error` |
 | `SUBADMIN_LOG_MAX_MB` | `10` | 单个 `subadmin.log` 文件最大大小，单位 MiB |
 | `SUBADMIN_LOG_MAX_BACKUPS` | `5` | 日志轮转后保留的历史文件数量 |
+| `SUBADMIN_DOCS_DIR` | `../docs` | 受保护 API 文档目录 |
+| `SUBADMIN_WEB_DIST` | `../web/dist` | 前端构建产物目录 |
 
 应用日志使用 JSON Lines 格式，同时写到标准输出和 `SUBADMIN_LOG_DIR/subadmin.log`。默认 `info` 等级；本机开发测试可设置 `SUBADMIN_LOG_LEVEL=debug` 记录更详细的请求、任务和操作信息。每个请求会返回并记录 `X-Request-ID`，业务日志会自动带上同一个 `request_id` 方便串联排查。
 
@@ -95,11 +99,21 @@ subAdmin/
 
 ```bash
 SUBADMIN_LOGIN_SECRET='change-me' \
+SUBADMIN_SECRET_KEY='change-me-too' \
 SUBADMIN_ADDR='127.0.0.1:8787' \
 ./subadmin
 ```
 
 ## 运行
+
+先构建前端静态资源：
+
+```bash
+cd web
+npm ci
+npm run build
+cd ..
+```
 
 进入后端目录：
 
@@ -116,7 +130,7 @@ go build ./cmd/subadmin
 运行：
 
 ```bash
-SUBADMIN_LOGIN_SECRET='change-me' ./subadmin
+SUBADMIN_LOGIN_SECRET='change-me' SUBADMIN_SECRET_KEY='change-me-too' ./subadmin
 ```
 
 健康检查：
@@ -145,9 +159,11 @@ PLAN.md
 
 当前下一阶段重点：
 
-- 导入预览
-- 导入执行前的确认、任务跟踪和审计日志基础
-- 高风险账号操作的安全工作流
+- 回归验证，尤其是最近的前端视图拆分
+- 导入结果展示和失败定位
+- 后端 targeted tests，包括认证、加密、脱敏、代理、Jobs 和导入解析
+- 导入异常处理和上游失败响应展示硬化
+- 高风险账号操作继续保持预览、确认、任务跟踪和审计日志基线
 
 ## 注意事项
 
@@ -155,4 +171,4 @@ PLAN.md
 - 不要把 SQLite 数据库提交到 Git。
 - 不要在浏览器端保存 sub2api 管理员 Key。
 - 批量测试响应日志默认不保存；如需保存，请使用项目根目录下的本地日志目录，例如 `data/logs`。
-- 导入执行和高风险批量操作上线前需要预览、明确确认、任务跟踪和审计日志。
+- 新增高风险批量操作上线前需要预览、明确确认、任务跟踪和审计日志；现有确认式导入已接入该基线。

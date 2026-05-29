@@ -35,9 +35,9 @@ Implemented capabilities:
 - Jobs view lists recent jobs, reopens batch-test/token-refresh results, retries failed items, and cancels queued/running jobs.
 - Statistics dashboard uses real upstream dashboard and Ops endpoints, defaults to 24h/hourly, and supports isolated refresh for user/account concurrency panels.
 - Application logs use structured JSON Lines with configurable level, request IDs, and simple file rotation under `SUBADMIN_LOG_DIR`.
-- Import page supports pasted text or small files, parses known account-shaped content server-side, and returns a sanitized preview. Confirmed imports run through Jobs and call sub2api's `/api/v1/admin/accounts/batch`; selected model lists are written as account `credentials.model_mapping` identity mappings. Real multi-batch imports have been exercised successfully.
-- Import templates can save and apply non-sensitive preview defaults.
-- Audit logs record site writes, job actions, and import preview summaries; the Audit page lists recent audit records.
+- Import page supports pasted text or small files, parses known account-shaped content server-side, and returns a sanitized preview with warnings, duplicate-risk markers, and paged results. Confirmed imports run through Jobs and call sub2api's `/api/v1/admin/accounts/batch`; selected model lists are written as account `credentials.model_mapping` identity mappings. Real multi-batch imports have been exercised successfully.
+- Import templates can save, overwrite, delete, and apply non-sensitive preview defaults.
+- Audit logs record site writes, job actions, import preview summaries, and import-template create/delete actions; the Audit page lists recent audit records.
 - Protected OpenAPI, Swagger UI, and AI reference docs are available inside the logged-in UI.
 - Frontend structure now separates top-level App orchestration from Import, Audit, and Docs views, with shared helpers for API calls, formatting, visual metrics, import settings, and account display.
 
@@ -93,7 +93,6 @@ Current scope:
 - Move job code out of `cmd/subadmin/main.go` if it grows further.
 - Add `job_items` only if `result_json` becomes too large or hard to query.
 - Add targeted backend tests for auth, encryption, redaction, proxy behavior, Jobs, and import preview parsing.
-- Add upload size and batch size limits for import preview.
 - Improve operational error messages around upstream timeouts and partial failures.
 - Improve import job result summaries when upstream returns partial failures or non-standard batch responses.
 - Revisit log rotation/retention policy if long-running deployments need time-based retention or compression.

@@ -42,8 +42,8 @@ This directory contains the management application for sub2api.
 - Account listing, filtering, batch testing, and batch token refresh.
 - Statistics dashboard based on real upstream dashboard and Ops data.
 - Persisted task implementation for batch workflows, including retry and best-effort cancellation.
-- Import preview without upstream writes.
+- Import preview without upstream writes, followed by confirmed import execution through Jobs.
 - Import templates for non-sensitive preview defaults.
 - Audit log recording and read-only audit view for key operations.
 - Protected docs page for logged-in users.
-- Next planned product work is confirmed import execution through Jobs.
+- Next planned product work is focused regression, import failure diagnostics, and hardening.
