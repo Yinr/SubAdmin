@@ -1654,10 +1654,10 @@ type importPreviewInput struct {
 }
 
 type importAccountsInput struct {
-	Text         string                 `json:"text"`
-	Filename     string                 `json:"filename"`
-	Settings     importAccountSettings  `json:"settings"`
-	Confirmation importAccountConfirm   `json:"confirmation"`
+	Text         string                `json:"text"`
+	Filename     string                `json:"filename"`
+	Settings     importAccountSettings `json:"settings"`
+	Confirmation importAccountConfirm  `json:"confirmation"`
 }
 
 type importAccountSettings struct {
@@ -1820,22 +1820,22 @@ func deleteImportTemplate(ctx context.Context, database *sql.DB, id int64) error
 }
 
 type importPreviewItem struct {
-	Index            int      `json:"index"`
-	Recognized       bool     `json:"recognized"`
-	Platform         string   `json:"platform"`
-	Type             string   `json:"type"`
-	Name             string   `json:"name"`
-	Group            string   `json:"group,omitempty"`
-	AppliedGroups    []string `json:"appliedGroups,omitempty"`
-	AppliedProxy     string   `json:"appliedProxy,omitempty"`
-	AppliedModels    []string `json:"appliedModels,omitempty"`
-	AppliedPriority  string   `json:"appliedPriority,omitempty"`
-	AppliedConcurrency string `json:"appliedConcurrency,omitempty"`
-	CredentialFields []string `json:"credentialFields"`
-	MissingFields    []string `json:"missingFields"`
-	Warnings         []string `json:"warnings"`
-	DuplicateKey     string   `json:"duplicateKey,omitempty"`
-	RawPreview       string   `json:"rawPreview,omitempty"`
+	Index              int      `json:"index"`
+	Recognized         bool     `json:"recognized"`
+	Platform           string   `json:"platform"`
+	Type               string   `json:"type"`
+	Name               string   `json:"name"`
+	Group              string   `json:"group,omitempty"`
+	AppliedGroups      []string `json:"appliedGroups,omitempty"`
+	AppliedProxy       string   `json:"appliedProxy,omitempty"`
+	AppliedModels      []string `json:"appliedModels,omitempty"`
+	AppliedPriority    string   `json:"appliedPriority,omitempty"`
+	AppliedConcurrency string   `json:"appliedConcurrency,omitempty"`
+	CredentialFields   []string `json:"credentialFields"`
+	MissingFields      []string `json:"missingFields"`
+	Warnings           []string `json:"warnings"`
+	DuplicateKey       string   `json:"duplicateKey,omitempty"`
+	RawPreview         string   `json:"rawPreview,omitempty"`
 }
 
 func writeImportPreview(w http.ResponseWriter, r *http.Request, database *sql.DB, siteID int64) {
@@ -2222,8 +2222,7 @@ func safeRawPreview(chunk string) string {
 }
 
 func sanitizeSecretText(value string) string {
-	result := regexp.MustCompile(`(?i)(access_token|refresh_token|id_token|api_key|key|secret|password|cookie|authorization|credentials)\s*[:=]\s*"?[^"\s,}]+"?`).ReplaceAllString(value, "$1:[redacted]")
-	return result
+	return redactSensitiveAssignments(value)
 }
 
 func sanitizeImportSettings(settings map[string]any) map[string]any {
@@ -2935,10 +2934,16 @@ func writeBatchTestLog(baseDir string, siteID, accountID int64, body string) (st
 }
 
 func redactSensitiveText(text string) string {
-	result := text
-	result = regexp.MustCompile(`(?i)(access_token|refresh_token|id_token|token|api_key|key|secret|password|cookie|authorization)\s*[:=]\s*"?[^"\s,}]+"?`).ReplaceAllString(result, "$1:[redacted]")
+	result := redactSensitiveAssignments(text)
 	result = regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]+`).ReplaceAllString(result, "$1[redacted]")
 	result = regexp.MustCompile(`(?i)sk-[A-Za-z0-9_-]+`).ReplaceAllString(result, "[redacted]")
+	return result
+}
+
+func redactSensitiveAssignments(text string) string {
+	keyPattern := `(?i)("?(?:access_token|refresh_token|id_token|token|api_key|key|secret|password|cookie|authorization|credentials)"?\s*[:=]\s*)`
+	result := regexp.MustCompile(keyPattern+`"[^"\r\n]*"`).ReplaceAllString(text, `${1}"[redacted]"`)
+	result = regexp.MustCompile(keyPattern+`[^"\s,}\{\[]+`).ReplaceAllString(result, `${1}[redacted]`)
 	return result
 }
 
