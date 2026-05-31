@@ -1,5 +1,19 @@
 export type ApiOptions = RequestInit & { timeoutMs?: number }
 
+type AuthErrorCallback = () => void
+let onAuthError: AuthErrorCallback | null = null
+
+export function setOnAuthError(cb: AuthErrorCallback) {
+  onAuthError = cb
+}
+
+export class AuthError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AuthError'
+  }
+}
+
 export async function api<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const { timeoutMs, signal, ...fetchOptions } = options
   const controller = new AbortController()
@@ -16,6 +30,10 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
       signal: controller.signal,
     })
     const data = await res.json().catch(() => ({}))
+    if (res.status === 401) {
+      onAuthError?.()
+      throw new AuthError(data.error || '登录已失效')
+    }
     if (!res.ok) throw new Error(data.error || '请求失败')
     return data as T
   } catch (error) {

@@ -31,7 +31,7 @@ import {
   groupStateLabel,
   normalizeAccounts,
 } from './accountDisplay'
-import { api } from './apiClient'
+import { api, setOnAuthError } from './apiClient'
 import { accountStatusOptions, accountTypeOptions, optionLabel, platformOptions, privacyModeOptions } from './appOptions'
 import {
   formatDateInput,
@@ -1482,6 +1482,14 @@ watch(batchRefreshResult, async () => {
 
 onMounted(refreshMe)
 onMounted(() => {
+  setOnAuthError(() => {
+    authed.value = false
+    sites.value = []
+    accounts.value = []
+    activeSiteId.value = null
+    accountPager.loaded = false
+    activeView.value = 'stats'
+  })
   document.addEventListener('click', handleDocumentClick, true)
 })
 onUnmounted(() => {
