@@ -2,6 +2,8 @@
 
 本文档面向 AI、脚本和自动化调用方，按能力域梳理管理员 Key 可调用接口。
 
+当前同步基准：sub2api `v0.1.133`。
+
 源码依据：
 
 - `backend/internal/server/middleware/admin_auth.go`
@@ -57,7 +59,6 @@ x-api-key: admin-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 | POST | `/api/v1/admin/system/restart` | 触发服务重启 |
 | POST | `/api/v1/admin/payment/orders/{id}/refund` | 执行退款 |
 | POST | `/api/v1/admin/usage/cleanup-tasks` | 创建用量清理任务，影响审计/计费记录 |
-| POST | `/api/v1/admin/ops/*/retry*` | 重试/重放请求，可能再次消耗上游额度 |
 | POST | `/api/v1/admin/settings/admin-api-key/regenerate` | 轮换管理员 Key，旧 Key 失效 |
 | DELETE | `/api/v1/admin/settings/admin-api-key` | 删除管理员 Key，Key 认证失效 |
 
@@ -96,6 +97,9 @@ SubAdmin 的批量测试响应日志默认不保存。若显式开启保存，�
 | DELETE | `/api/v1/admin/users/{id}` | 删除用户 |
 | POST | `/api/v1/admin/users/{id}/auth-identities` | 手动绑定第三方认证身份 |
 | POST | `/api/v1/admin/users/{id}/balance` | 修改用户余额 |
+| GET | `/api/v1/admin/users/{id}/platform-quotas` | 用户平台配额 |
+| PUT | `/api/v1/admin/users/{id}/platform-quotas` | 全量替换用户平台配额 |
+| POST | `/api/v1/admin/users/{id}/platform-quotas/reset` | 重置用户平台配额窗口 |
 | GET | `/api/v1/admin/users/{id}/api-keys` | 用户 API Key 列表 |
 | GET | `/api/v1/admin/users/{id}/usage` | 用户用量 |
 | GET | `/api/v1/admin/users/{id}/balance-history` | 用户余额历史 |
@@ -123,6 +127,7 @@ SubAdmin 的批量测试响应日志默认不保存。若显式开启保存，�
 | GET | `/api/v1/admin/groups/{id}/rate-multipliers` | 分组模型倍率 |
 | PUT | `/api/v1/admin/groups/{id}/rate-multipliers` | 批量设置分组模型倍率 |
 | DELETE | `/api/v1/admin/groups/{id}/rate-multipliers` | 清空分组模型倍率 |
+| GET | `/api/v1/admin/groups/{id}/models-list-candidates` | 分组模型候选列表 |
 | PUT | `/api/v1/admin/groups/{id}/rpm-overrides` | 批量设置分组 RPM override |
 | DELETE | `/api/v1/admin/groups/{id}/rpm-overrides` | 清空分组 RPM override |
 | GET | `/api/v1/admin/groups/{id}/api-keys` | 分组 API Key |
@@ -140,6 +145,7 @@ SubAdmin 的批量测试响应日志默认不保存。若显式开启保存，�
 | POST | `/api/v1/admin/accounts/{id}/test` | 测试账号 |
 | POST | `/api/v1/admin/accounts/{id}/recover-state` | 恢复账号状态 |
 | POST | `/api/v1/admin/accounts/{id}/refresh` | 刷新账号 token/状态 |
+| POST | `/api/v1/admin/accounts/{id}/apply-oauth-credentials` | 落库重新授权 OAuth 凭据 |
 | POST | `/api/v1/admin/accounts/{id}/set-privacy` | 设置账号隐私 |
 | POST | `/api/v1/admin/accounts/{id}/refresh-tier` | 刷新账号 tier |
 | GET | `/api/v1/admin/accounts/{id}/stats` | 账号统计 |
@@ -214,6 +220,11 @@ SubAdmin 的批量测试响应日志默认不保存。若显式开启保存，�
 | PUT | `/api/v1/admin/settings` | 更新全局设置 |
 | POST | `/api/v1/admin/settings/test-smtp` | 测试 SMTP |
 | POST | `/api/v1/admin/settings/send-test-email` | 发送测试邮件 |
+| GET | `/api/v1/admin/settings/email-templates` | 邮件模板列表 |
+| GET | `/api/v1/admin/settings/email-templates/{event}/{locale}` | 邮件模板详情 |
+| PUT | `/api/v1/admin/settings/email-templates/{event}/{locale}` | 更新邮件模板 |
+| POST | `/api/v1/admin/settings/email-templates/{event}/{locale}/restore-official` | 恢复官方模板 |
+| POST | `/api/v1/admin/settings/email-template-preview` | 预览邮件模板 |
 | GET | `/api/v1/admin/settings/admin-api-key` | 管理员 Key 状态 |
 | POST | `/api/v1/admin/settings/admin-api-key/regenerate` | 生成/重置管理员 Key |
 | DELETE | `/api/v1/admin/settings/admin-api-key` | 删除管理员 Key |
@@ -314,12 +325,12 @@ SubAdmin 的批量测试响应日志默认不保存。若显式开启保存，�
 - TLSFingerprintProfiles：管理 TLS 指纹模板。
 - APIKeys：更新用户 API Key 分组，重置限速用量。
 - ScheduledTests：创建/更新/删除定时测试计划，查看测试结果。
-- Channels：创建/查看/更新/删除渠道，查询模型默认定价。
+- Channels：创建/查看/更新/删除渠道，查询模型默认定价和定价目录模型同步。
 - ChannelMonitors：管理渠道监控和模板，手动运行监控，查看历史。
 - RiskControl：管理风控配置、测试风控 key、查看日志、解封、删除 flagged hash。
 - Affiliates：查看邀请/返利/转账记录，管理专属返利用户配置。
 - AdminPayment：管理支付配置、订单、退款、套餐、provider。
-- Ops：查询实时监控、告警、错误日志、请求明细、系统日志，并可执行 retry/resolve/cleanup。
+- Ops：查询实时监控、告警、错误日志、请求明细、系统日志，并可执行 resolve/cleanup。
 
 ## 推荐调用约束
 
@@ -327,4 +338,4 @@ SubAdmin 的批量测试响应日志默认不保存。若显式开启保存，�
 - 不要把管理员 Key 暴露给前端浏览器。
 - 对高风险路径增加来源限制或二次认证。
 - 轮换管理员 Key 后，立即更新所有集成方配置。
-- 自动化脚本应默认禁用系统更新、重启、备份下载、账号导出、退款、用量清理、Ops retry，除非用户显式确认。
+- 自动化脚本应默认禁用系统更新、重启、备份下载、账号导出、退款、用量清理，除非用户显式确认。

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: sub2api Admin API
-  version: 0.1.127
+  version: 0.1.133
   description: |
     sub2api 管理端 API。本文档覆盖源码中 `RegisterAdminRoutes` 和 `RegisterPaymentRoutes`
     挂载的所有 `adminAuth` 管理接口。
@@ -167,6 +167,29 @@ paths:
   /api/v1/admin/users/{id}/rpm-status:
     parameters: [{$ref: '#/components/parameters/Id'}]
     get: {tags: [Users], summary: 获取用户 RPM 状态, operationId: getAdminUserRpmStatus, responses: *StandardResponses}
+  /api/v1/admin/users/{id}/platform-quotas:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      tags: [Users]
+      summary: 获取用户平台配额
+      operationId: getAdminUserPlatformQuotas
+      description: admin 视角返回 platform_quotas，包含 daily/weekly/monthly 的 usage、limit、resets_at，以及 *_window_start 调试字段。
+      responses: *StandardResponses
+    put:
+      tags: [Users]
+      summary: 全量替换用户平台配额
+      operationId: updateAdminUserPlatformQuotas
+      requestBody: {$ref: '#/components/requestBodies/UserPlatformQuotasBody'}
+      responses: *StandardResponses
+  /api/v1/admin/users/{id}/platform-quotas/reset:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [Users]
+      summary: 重置用户平台配额窗口
+      operationId: resetAdminUserPlatformQuotaWindow
+      description: 立即归零指定 platform/window 的用量并更新窗口起始时间。
+      requestBody: {$ref: '#/components/requestBodies/ResetUserPlatformQuotaWindowBody'}
+      responses: *StandardResponses
   /api/v1/admin/users/{id}/attributes:
     parameters: [{$ref: '#/components/parameters/Id'}]
     get: {tags: [Users], summary: 获取用户属性值, operationId: getAdminUserAttributes, responses: *StandardResponses}
@@ -191,6 +214,15 @@ paths:
     get: {tags: [Groups], summary: 获取分组详情, operationId: getAdminGroup, responses: *StandardResponses}
     put: {tags: [Groups], summary: 更新分组, operationId: updateAdminGroup, requestBody: {$ref: '#/components/requestBodies/GroupBody'}, responses: *StandardResponses}
     delete: {tags: [Groups], summary: 删除分组, operationId: deleteAdminGroup, responses: *StandardResponses}
+  /api/v1/admin/groups/{id}/models-list-candidates:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      tags: [Groups]
+      summary: 获取分组模型候选列表
+      operationId: getAdminGroupModelsListCandidates
+      parameters: [{$ref: '#/components/parameters/Platform'}]
+      description: 返回可用于 /v1/models 列表的候选模型 ID，data.models 为字符串数组。
+      responses: *StandardResponses
   /api/v1/admin/groups/{id}/stats:
     parameters: [{$ref: '#/components/parameters/Id'}]
     get: {tags: [Groups], summary: 获取分组统计, operationId: getAdminGroupStats, responses: *StandardResponses}
@@ -274,6 +306,15 @@ paths:
   /api/v1/admin/accounts/{id}/refresh:
     parameters: [{$ref: '#/components/parameters/Id'}]
     post: {tags: [Accounts], summary: 刷新账号 token/状态, operationId: refreshAdminAccount, responses: *StandardResponses}
+  /api/v1/admin/accounts/{id}/apply-oauth-credentials:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      tags: [Accounts]
+      summary: 落库重新授权得到的 OAuth 凭据
+      operationId: applyAdminAccountOAuthCredentials
+      description: 仅接收 type、credentials、extra 三个字段；会更新账号凭据、合并 extra，并清除错误状态与相关 token 缓存。
+      requestBody: {$ref: '#/components/requestBodies/ApplyOAuthCredentialsBody'}
+      responses: *StandardResponses
   /api/v1/admin/accounts/{id}/set-privacy:
     parameters: [{$ref: '#/components/parameters/Id'}]
     post: {tags: [Accounts], summary: 设置账号隐私, operationId: setAdminAccountPrivacy, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
@@ -420,6 +461,41 @@ paths:
     post: {tags: [Settings], summary: 测试 SMTP 连接, operationId: testAdminSmtp, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
   /api/v1/admin/settings/send-test-email:
     post: {tags: [Settings], summary: 发送测试邮件, operationId: sendAdminTestEmail, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
+  /api/v1/admin/settings/email-templates:
+    get:
+      tags: [Settings]
+      summary: 获取可编辑邮件模板列表
+      operationId: listAdminEmailTemplates
+      description: 返回 events、locales、templates、placeholders 四组数据。
+      responses: *StandardResponses
+  /api/v1/admin/settings/email-template-preview:
+    post:
+      tags: [Settings]
+      summary: 预览邮件模板
+      operationId: previewAdminEmailTemplate
+      description: 使用安全样例变量渲染模板，不会写库。
+      requestBody: {$ref: '#/components/requestBodies/EmailTemplatePreviewBody'}
+      responses: *StandardResponses
+  /api/v1/admin/settings/email-templates/{event}/{locale}:
+    parameters: [{$ref: '#/components/parameters/Event'}, {$ref: '#/components/parameters/Locale'}]
+    get:
+      tags: [Settings]
+      summary: 获取单个邮件模板
+      operationId: getAdminEmailTemplate
+      responses: *StandardResponses
+    put:
+      tags: [Settings]
+      summary: 更新邮件模板覆盖
+      operationId: updateAdminEmailTemplate
+      requestBody: {$ref: '#/components/requestBodies/EmailTemplateUpdateBody'}
+      responses: *StandardResponses
+  /api/v1/admin/settings/email-templates/{event}/{locale}/restore-official:
+    parameters: [{$ref: '#/components/parameters/Event'}, {$ref: '#/components/parameters/Locale'}]
+    post:
+      tags: [Settings]
+      summary: 恢复官方邮件模板
+      operationId: restoreAdminEmailTemplate
+      responses: *StandardResponses
   /api/v1/admin/settings/admin-api-key:
     get: {tags: [Settings], summary: 获取管理员 Key 状态, operationId: getAdminApiKeyStatus, responses: *StandardResponses}
     delete: {tags: [Settings], summary: 删除管理员 Key, operationId: deleteAdminApiKey, description: 成功后当前 x-api-key 认证会失效。 , responses: *StandardResponses}
@@ -600,6 +676,14 @@ paths:
     post: {tags: [Channels], summary: 创建渠道, operationId: createChannel, requestBody: {$ref: '#/components/requestBodies/ChannelBody'}, responses: *StandardResponses}
   /api/v1/admin/channels/model-pricing:
     get: {tags: [Channels], summary: 获取模型默认定价, operationId: getChannelModelDefaultPricing, responses: *StandardResponses}
+  /api/v1/admin/channels/pricing/sync-models:
+    get:
+      tags: [Channels]
+      summary: 同步定价目录模型列表
+      operationId: syncAdminChannelPricingModels
+      parameters: [{$ref: '#/components/parameters/Platform'}]
+      description: 从 LiteLLM 定价目录读取指定平台的最新模型列表，data.models 为字符串数组。
+      responses: *StandardResponses
   /api/v1/admin/channels/{id}:
     parameters: [{$ref: '#/components/parameters/Id'}]
     get: {tags: [Channels], summary: 获取渠道详情, operationId: getChannel, responses: *StandardResponses}
@@ -755,12 +839,6 @@ paths:
   /api/v1/admin/ops/errors/{id}:
     parameters: [{$ref: '#/components/parameters/IdString'}]
     get: {tags: [Ops], summary: legacy 错误日志详情, operationId: getOpsError, responses: *StandardResponses}
-  /api/v1/admin/ops/errors/{id}/retries:
-    parameters: [{$ref: '#/components/parameters/IdString'}]
-    get: {tags: [Ops], summary: legacy 错误重试记录, operationId: listOpsErrorRetries, responses: *StandardResponses}
-  /api/v1/admin/ops/errors/{id}/retry:
-    parameters: [{$ref: '#/components/parameters/IdString'}]
-    post: {tags: [Ops], summary: 重试 legacy 错误请求, operationId: retryOpsErrorRequest, description: 可能重放请求并再次消耗上游额度。 , responses: *StandardResponses}
   /api/v1/admin/ops/errors/{id}/resolve:
     parameters: [{$ref: '#/components/parameters/IdString'}]
     put: {tags: [Ops], summary: 标记 legacy 错误解决状态, operationId: resolveOpsError, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
@@ -772,12 +850,6 @@ paths:
   /api/v1/admin/ops/request-errors/{id}/upstream-errors:
     parameters: [{$ref: '#/components/parameters/IdString'}]
     get: {tags: [Ops], summary: 请求错误关联上游错误, operationId: listOpsRequestErrorUpstreamErrors, responses: *StandardResponses}
-  /api/v1/admin/ops/request-errors/{id}/retry-client:
-    parameters: [{$ref: '#/components/parameters/IdString'}]
-    post: {tags: [Ops], summary: 重试 client-visible 请求错误, operationId: retryOpsRequestErrorClient, description: 可能重放请求并再次消耗上游额度。 , responses: *StandardResponses}
-  /api/v1/admin/ops/request-errors/{id}/upstream-errors/{idx}/retry:
-    parameters: [{$ref: '#/components/parameters/IdString'}, {$ref: '#/components/parameters/Idx'}]
-    post: {tags: [Ops], summary: 重试请求错误中的某个上游事件, operationId: retryOpsRequestErrorUpstreamEvent, description: 可能重放请求并再次消耗上游额度。 , responses: *StandardResponses}
   /api/v1/admin/ops/request-errors/{id}/resolve:
     parameters: [{$ref: '#/components/parameters/IdString'}]
     put: {tags: [Ops], summary: 标记请求错误解决状态, operationId: resolveOpsRequestError, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
@@ -786,9 +858,6 @@ paths:
   /api/v1/admin/ops/upstream-errors/{id}:
     parameters: [{$ref: '#/components/parameters/IdString'}]
     get: {tags: [Ops], summary: 上游错误详情, operationId: getOpsUpstreamError, responses: *StandardResponses}
-  /api/v1/admin/ops/upstream-errors/{id}/retry:
-    parameters: [{$ref: '#/components/parameters/IdString'}]
-    post: {tags: [Ops], summary: 重试上游错误, operationId: retryOpsUpstreamError, description: 可能重放上游请求并再次消耗额度。 , responses: *StandardResponses}
   /api/v1/admin/ops/upstream-errors/{id}/resolve:
     parameters: [{$ref: '#/components/parameters/IdString'}]
     put: {tags: [Ops], summary: 标记上游错误解决状态, operationId: resolveOpsUpstreamError, requestBody: {$ref: '#/components/requestBodies/FreeFormBody'}, responses: *StandardResponses}
@@ -830,6 +899,8 @@ components:
     ProfileId: {name: profile_id, in: path, required: true, schema: {type: string}}
     SourceType: {name: source_type, in: path, required: true, schema: {type: string}}
     Idx: {name: idx, in: path, required: true, schema: {type: integer}}
+    Event: {name: event, in: path, required: true, schema: {type: string}}
+    Locale: {name: locale, in: path, required: true, schema: {type: string}}
     Page: {name: page, in: query, required: false, schema: {type: integer, minimum: 1, default: 1}}
     PageSize: {name: page_size, in: query, required: false, schema: {type: integer, minimum: 1, maximum: 1000, default: 20}}
     Search: {name: search, in: query, required: false, schema: {type: string}}
@@ -920,6 +991,31 @@ components:
       content:
         application/json:
           schema: {$ref: '#/components/schemas/SystemSettingsPatch'}
+    ApplyOAuthCredentialsBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ApplyOAuthCredentialsRequest'}
+    UserPlatformQuotasBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/UpdateUserPlatformQuotasRequest'}
+    ResetUserPlatformQuotaWindowBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ResetUserPlatformQuotaWindowRequest'}
+    EmailTemplateUpdateBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/UpdateEmailTemplateRequest'}
+    EmailTemplatePreviewBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/PreviewEmailTemplateRequest'}
     S3ConfigBody:
       required: true
       content:
@@ -1148,4 +1244,109 @@ components:
         api_key: {type: string, format: password}
         status: {type: string}
         models: {type: array, items: {type: string}}
+      additionalProperties: true
+    ApplyOAuthCredentialsRequest:
+      type: object
+      required: [type, credentials]
+      properties:
+        type: {type: string, enum: [oauth, setup-token]}
+        credentials:
+          type: object
+          additionalProperties: true
+        extra:
+          type: object
+          additionalProperties: true
+      additionalProperties: false
+    UpdateUserPlatformQuotasRequest:
+      type: object
+      required: [quotas]
+      properties:
+        quotas:
+          type: array
+          maxItems: 4
+          items:
+            type: object
+            required: [platform]
+            properties:
+              platform: {type: string, example: anthropic}
+              daily_limit_usd: {type: number, nullable: true}
+              weekly_limit_usd: {type: number, nullable: true}
+              monthly_limit_usd: {type: number, nullable: true}
+      additionalProperties: false
+    ResetUserPlatformQuotaWindowRequest:
+      type: object
+      required: [platform, window]
+      properties:
+        platform: {type: string, example: anthropic}
+        window: {type: string, enum: [daily, weekly, monthly]}
+      additionalProperties: false
+    EmailTemplateEventOption:
+      type: object
+      properties:
+        value: {type: string}
+        label: {type: string}
+        description: {type: string}
+        category: {type: string}
+        optional: {type: boolean}
+      additionalProperties: true
+    EmailTemplateSummary:
+      type: object
+      properties:
+        event: {type: string}
+        locale: {type: string}
+        subject: {type: string}
+        is_custom: {type: boolean}
+        updated_at: {type: string}
+      additionalProperties: true
+    EmailTemplateListResponse:
+      type: object
+      properties:
+        events:
+          type: array
+          items: {$ref: '#/components/schemas/EmailTemplateEventOption'}
+        locales:
+          type: array
+          items: {type: string}
+        templates:
+          type: array
+          items: {$ref: '#/components/schemas/EmailTemplateSummary'}
+        placeholders:
+          type: array
+          items: {type: string}
+      additionalProperties: true
+    EmailTemplateDetail:
+      type: object
+      properties:
+        event: {type: string}
+        locale: {type: string}
+        subject: {type: string}
+        html: {type: string}
+        is_custom: {type: boolean}
+        updated_at: {type: string}
+        placeholders:
+          type: array
+          items: {type: string}
+      additionalProperties: true
+    UpdateEmailTemplateRequest:
+      type: object
+      properties:
+        subject: {type: string}
+        html: {type: string}
+      additionalProperties: true
+    PreviewEmailTemplateRequest:
+      type: object
+      properties:
+        event: {type: string}
+        locale: {type: string}
+        subject: {type: string}
+        html: {type: string}
+        variables:
+          type: object
+          additionalProperties: {type: string}
+      additionalProperties: true
+    EmailTemplatePreviewResponse:
+      type: object
+      properties:
+        subject: {type: string}
+        html: {type: string}
       additionalProperties: true

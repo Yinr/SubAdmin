@@ -39,6 +39,7 @@ Implemented capabilities:
 - Import templates can save, overwrite, delete, and apply non-sensitive preview defaults.
 - Audit logs record site writes, job actions, import preview summaries, and import-template create/delete actions; the Audit page lists recent audit records.
 - Protected OpenAPI, Swagger UI, and AI reference docs are available inside the logged-in UI.
+- Documentation has been refreshed to track sub2api `v0.1.133`; backend or frontend behavior changes still need explicit verification before follow-up work.
 - Frontend structure now separates top-level App orchestration from Import, Audit, and Docs views, with shared helpers for API calls, formatting, visual metrics, import settings, and account display.
 
 ## Completed Areas
