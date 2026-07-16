@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -330,6 +331,10 @@ func main() {
 			writeSiteAccountConcurrency(w, r, siteService, id)
 			return
 		}
+		if action == "error-accounts" {
+			writeErrorAccounts(w, r, authManager, siteService, id)
+			return
+		}
 		if action != "" {
 			writeError(w, http.StatusNotFound, "site action not found")
 			return
@@ -507,6 +512,8 @@ func routeGroup(path string) string {
 		return "auth"
 	case strings.HasPrefix(path, "/api/sites") && strings.Contains(path, "search-by-names"):
 		return "accounts/search-by-names"
+	case strings.HasPrefix(path, "/api/sites") && strings.Contains(path, "error-accounts"):
+		return "error-accounts"
 	case strings.HasPrefix(path, "/api/sites"):
 		return "sites"
 	case strings.HasPrefix(path, "/api/jobs"):
@@ -2745,6 +2752,122 @@ func extractAccountList(value any) []map[string]any {
 	}
 	return result
 }
+
+type errorAccountItem struct {
+	ID           int64    `json:"id"`
+	Name         string   `json:"name"`
+	Email        string   `json:"email"`
+	Platform     string   `json:"platform"`
+	Type         string   `json:"type"`
+	Status       string   `json:"status"`
+	ErrorMessage string   `json:"error_message"`
+	UpdatedAt    string   `json:"updated_at"`
+	Usage5h      *float64 `json:"usage_5h,omitempty"`
+	Usage7d      *float64 `json:"usage_7d,omitempty"`
+}
+
+func writeErrorAccounts(w http.ResponseWriter, r *http.Request, authMgr *auth.Manager, svc *sites.Service, siteID int64) {
+	if !requireAuth(w, r, authMgr) {
+		return
+	}
+	if svc == nil {
+		writeError(w, http.StatusServiceUnavailable, "SUBADMIN_SECRET_KEY is required")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	groupName := r.URL.Query().Get("group")
+	if groupName == "" {
+		groupName = "free"
+	}
+
+	// Resolve group name to ID
+	groupsData, _, err := svc.AdminGET(r.Context(), siteID, "/api/v1/admin/groups/all", nil)
+	if err != nil {
+		writeSiteError(w, err)
+		return
+	}
+	var groupsResp struct {
+		Data []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(groupsData, &groupsResp); err != nil {
+		writeError(w, http.StatusBadRequest, "failed to parse groups")
+		return
+	}
+	var groupID int64
+	for _, g := range groupsResp.Data {
+		if g.Name == groupName {
+			groupID = g.ID
+			break
+		}
+	}
+	if groupID == 0 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("group %q not found", groupName))
+		return
+	}
+
+	// Fetch error accounts
+	query := url.Values{"status": {"error"}, "group": {strconv.FormatInt(groupID, 10)}, "page_size": {"100"}}
+	accountsData, _, err := svc.AdminGET(r.Context(), siteID, "/api/v1/admin/accounts", query)
+	if err != nil {
+		writeSiteError(w, err)
+		return
+	}
+	var accountsResp struct {
+		Data struct {
+			Items []map[string]any `json:"items"`
+			Total int64            `json:"total"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(accountsData, &accountsResp); err != nil {
+		writeError(w, http.StatusBadRequest, "failed to parse accounts")
+		return
+	}
+
+	items := make([]errorAccountItem, 0, len(accountsResp.Data.Items))
+	for _, acc := range accountsResp.Data.Items {
+		item := errorAccountItem{
+			ID:           int64FromAny(acc["id"]),
+			Name:         fmt.Sprint(acc["name"]),
+			Platform:     fmt.Sprint(acc["platform"]),
+			Type:         fmt.Sprint(acc["type"]),
+			Status:       fmt.Sprint(acc["status"]),
+			ErrorMessage: fmt.Sprint(acc["error_message"]),
+			UpdatedAt:    fmt.Sprint(acc["updated_at"]),
+		}
+		if creds, ok := acc["credentials"].(map[string]any); ok {
+			if email, ok := creds["email"].(string); ok {
+				item.Email = email
+			}
+		}
+		if extra, ok := acc["extra"].(map[string]any); ok {
+			item.Usage5h = extractUsagePercent(extra, "codex_primary_used_percent", "codex_5h_used_percent")
+			item.Usage7d = extractUsagePercent(extra, "codex_secondary_used_percent", "codex_7d_used_percent")
+		}
+		items = append(items, item)
+	}
+	slog.InfoContext(r.Context(), "error accounts listed", "site_id", siteID, "group", groupName, "total", accountsResp.Data.Total, "returned", len(items))
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": accountsResp.Data.Total, "group": groupName})
+}
+
+func extractUsagePercent(extra map[string]any, keys ...string) *float64 {
+	for _, key := range keys {
+		if v := extra[key]; v != nil {
+			s := strings.TrimSpace(strings.TrimSuffix(fmt.Sprint(v), "%"))
+			if n, err := strconv.ParseFloat(s, 64); err == nil {
+				return ptrFloat64(math.Max(0, math.Min(100, n)))
+			}
+		}
+	}
+	return nil
+}
+
+func ptrFloat64(v float64) *float64 { return &v }
 
 func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
 	now := time.Now()

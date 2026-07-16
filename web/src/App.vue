@@ -7,6 +7,7 @@ import ImportView from './views/ImportView.vue'
 import AuditView from './views/AuditView.vue'
 import DocsView from './views/DocsView.vue'
 import SearchView from './views/SearchView.vue'
+import ErrorAccountsView from './views/ErrorAccountsView.vue'
 import {
   accountDetailJSON,
   accountErrorText,
@@ -69,7 +70,7 @@ type Account = Record<string, unknown>
 type Group = Record<string, unknown>
 type JobRecord = Record<string, unknown>
 type GroupState = 'any' | 'include' | 'exclude'
-type ViewMode = 'stats' | 'accounts' | 'import' | 'jobs' | 'audit' | 'sites' | 'docs' | 'search'
+type ViewMode = 'stats' | 'accounts' | 'import' | 'jobs' | 'audit' | 'sites' | 'docs' | 'search' | 'errors'
 
 const authed = ref(false)
 const expiresAt = ref('')
@@ -1528,6 +1529,7 @@ onUnmounted(() => {
           <button :class="activeView === 'import' ? '' : 'secondary'" @click="showImport">导入</button>
           <button :class="activeView === 'jobs' ? '' : 'secondary'" @click="showJobs">任务</button>
           <button :class="activeView === 'audit' ? '' : 'secondary'" @click="showAudit">审计</button>
+          <button :class="activeView === 'errors' ? '' : 'secondary'" @click="activeView = 'errors'">错误账号</button>
           <button :class="activeView === 'sites' ? '' : 'secondary'" @click="activeView = 'sites'">站点</button>
           <button :class="activeView === 'docs' ? '' : 'secondary'" @click="showDocs">文档</button>
           <button class="secondary" @click="logout">退出登录</button>
@@ -1844,6 +1846,8 @@ onUnmounted(() => {
       <AuditView v-else-if="activeView === 'audit'" />
 
       <SearchView v-else-if="activeView === 'search'" :active-site-id="activeSiteId" @open-detail="(id: number) => openAccountDetail({ id } as Account)" />
+
+      <ErrorAccountsView v-else-if="activeView === 'errors'" :activeSiteId="activeSiteId" />
 
       <DocsView v-else-if="activeView === 'docs'" :copy-text="copyText" />
 
