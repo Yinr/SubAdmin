@@ -331,6 +331,10 @@ func main() {
 			writeSiteAccountConcurrency(w, r, siteService, id)
 			return
 		}
+		if action == "group-quota" {
+			writeGroupQuota(w, r, authManager, siteService, id)
+			return
+		}
 		if action == "error-accounts" {
 			writeErrorAccounts(w, r, authManager, siteService, id)
 			return
@@ -512,6 +516,8 @@ func routeGroup(path string) string {
 		return "auth"
 	case strings.HasPrefix(path, "/api/sites") && strings.Contains(path, "search-by-names"):
 		return "accounts/search-by-names"
+	case strings.HasPrefix(path, "/api/sites") && strings.Contains(path, "group-quota"):
+		return "group-quota"
 	case strings.HasPrefix(path, "/api/sites") && strings.Contains(path, "error-accounts"):
 		return "error-accounts"
 	case strings.HasPrefix(path, "/api/sites"):
@@ -2764,6 +2770,358 @@ type errorAccountItem struct {
 	UpdatedAt    string   `json:"updated_at"`
 	Usage5h      *float64 `json:"usage_5h,omitempty"`
 	Usage7d      *float64 `json:"usage_7d,omitempty"`
+}
+
+type groupQuotaAccount struct {
+	ID                   int64   `json:"id"`
+	Name                 string  `json:"name"`
+	UsedPercent          float64 `json:"usedPercent"`
+	WindowMinutes        int     `json:"windowMinutes"`
+	ResetAfterSeconds    int64   `json:"resetAfterSeconds"`
+	CycleCost            float64 `json:"cycleCost"`
+	EstimatedTotalQuota  float64 `json:"estimatedTotalQuota"`
+	RemainingUSD         float64 `json:"remainingUsd"`
+}
+
+type groupQuotaBucket struct {
+	Range        string  `json:"range"`
+	MinPercent   int     `json:"minPercent"`
+	MaxPercent   int     `json:"maxPercent"`
+	Count        int     `json:"count"`
+	RemainingUSD float64 `json:"remainingUsd"`
+}
+
+type groupQuotaResponse struct {
+	Group               string             `json:"group"`
+	GroupID             int64              `json:"groupId"`
+	TotalAccounts       int                `json:"totalAccounts"`
+	TotalQuotaUSD       float64            `json:"totalQuotaUsd"`
+	UsedQuotaUSD        float64            `json:"usedQuotaUsd"`
+	RemainingUSD        float64            `json:"remainingUsd"`
+	DefaultQuotaPerAcct float64            `json:"defaultQuotaPerAccount"`
+	AccurateEstimate    bool               `json:"accurateEstimate"`
+	Cached              bool               `json:"cached"`
+	CachedAt            int64              `json:"cachedAt,omitempty"`
+	Buckets             []groupQuotaBucket `json:"buckets"`
+	Accounts            []groupQuotaAccount `json:"accounts"`
+}
+
+type groupQuotaCacheEntry struct {
+	response  groupQuotaResponse
+	cachedAt  time.Time
+}
+
+var (
+	groupQuotaCache    = make(map[string]groupQuotaCacheEntry)
+	groupQuotaCacheMu  sync.Mutex
+	groupQuotaCacheTTL = 24 * time.Hour
+)
+
+func groupQuotaCacheKey(siteID int64, groupName string) string {
+	return strconv.FormatInt(siteID, 10) + ":" + groupName
+}
+
+func writeGroupQuota(w http.ResponseWriter, r *http.Request, authMgr *auth.Manager, svc *sites.Service, siteID int64) {
+	if !requireAuth(w, r, authMgr) {
+		return
+	}
+	if svc == nil {
+		writeError(w, http.StatusServiceUnavailable, "SUBADMIN_SECRET_KEY is required")
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	groupName := r.URL.Query().Get("group")
+	if groupName == "" {
+		groupName = "free"
+	}
+
+	refresh := r.URL.Query().Get("refresh") == "true"
+	cacheKey := groupQuotaCacheKey(siteID, groupName)
+	if !refresh {
+		groupQuotaCacheMu.Lock()
+		entry, hit := groupQuotaCache[cacheKey]
+		groupQuotaCacheMu.Unlock()
+		if hit && time.Since(entry.cachedAt) < groupQuotaCacheTTL {
+			entry.response.Cached = true
+			entry.response.CachedAt = entry.cachedAt.Unix()
+			writeJSON(w, http.StatusOK, entry.response)
+			return
+		}
+	}
+	defaultQuota := 2.0
+	if v := r.URL.Query().Get("defaultQuota"); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil && n > 0 {
+			defaultQuota = n
+		}
+	}
+
+	groupsData, _, err := svc.AdminGET(r.Context(), siteID, "/api/v1/admin/groups/all", nil)
+	if err != nil {
+		writeSiteError(w, err)
+		return
+	}
+	var groupsResp struct {
+		Data []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(groupsData, &groupsResp); err != nil {
+		writeError(w, http.StatusBadRequest, "failed to parse groups")
+		return
+	}
+	var groupID int64
+	for _, g := range groupsResp.Data {
+		if g.Name == groupName {
+			groupID = g.ID
+			break
+		}
+	}
+	if groupID == 0 {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("group %q not found", groupName))
+		return
+	}
+
+	var allItems []map[string]any
+	page := 1
+	pageSize := 200
+	for {
+		query := url.Values{"group": {strconv.FormatInt(groupID, 10)}, "page": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(pageSize)}}
+		accountsData, _, err := svc.AdminGET(r.Context(), siteID, "/api/v1/admin/accounts", query)
+		if err != nil {
+			writeSiteError(w, err)
+			return
+		}
+		var accountsResp struct {
+			Data struct {
+				Items []map[string]any `json:"items"`
+				Total int64            `json:"total"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(accountsData, &accountsResp); err != nil {
+			writeError(w, http.StatusBadRequest, "failed to parse accounts")
+			return
+		}
+		allItems = append(allItems, accountsResp.Data.Items...)
+		if len(accountsResp.Data.Items) < pageSize {
+			break
+		}
+		if accountsResp.Data.Total > 0 && int64(len(allItems)) >= accountsResp.Data.Total {
+			break
+		}
+		page++
+		if page > 20 {
+			break
+		}
+	}
+
+	accounts := make([]groupQuotaAccount, 0, len(allItems))
+	for _, acc := range allItems {
+		id := int64FromAny(acc["id"])
+		usedPct := 0.0
+		windowMin := 0
+		resetAfterSec := int64(0)
+		if extra, ok := acc["extra"].(map[string]any); ok {
+			usedPct = extractUsagePercentFloat(extra, "codex_primary_used_percent", "codex_7d_used_percent")
+			if v := extractIntValue(extra, "codex_primary_window_minutes"); v > 0 {
+				windowMin = int(v)
+			}
+			resetAfterSec = extractIntValue(extra, "codex_primary_reset_after_seconds")
+		}
+		name := fmt.Sprint(acc["name"])
+		accounts = append(accounts, groupQuotaAccount{
+			ID:                id,
+			Name:              name,
+			UsedPercent:       usedPct,
+			WindowMinutes:     windowMin,
+			ResetAfterSeconds: resetAfterSec,
+		})
+	}
+
+	var earliestCycleStart time.Time
+	for _, acc := range accounts {
+		if acc.WindowMinutes <= 0 || acc.ResetAfterSeconds <= 0 {
+			continue
+		}
+		cycleStart := time.Now().Add(time.Duration(acc.ResetAfterSeconds)*time.Second - time.Duration(acc.WindowMinutes)*time.Minute)
+		if earliestCycleStart.IsZero() || cycleStart.Before(earliestCycleStart) {
+			earliestCycleStart = cycleStart
+		}
+	}
+
+	cycleCosts := make(map[int64]float64)
+	accurateEstimate := false
+	if !earliestCycleStart.IsZero() {
+		startDate := earliestCycleStart.Format("2006-01-02")
+		endDate := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+		accountIDs := make([]int64, len(accounts))
+		for i, acc := range accounts {
+			accountIDs[i] = acc.ID
+		}
+		costs, err := queryUsageCostsViaAPI(r.Context(), svc, siteID, accountIDs, startDate, endDate)
+		if err != nil {
+			slog.WarnContext(r.Context(), "query usage costs via API failed, using default quota", "error", err)
+		} else {
+			cycleCosts = costs
+			accurateEstimate = true
+		}
+	}
+
+	for i := range accounts {
+		cost, hasCost := cycleCosts[accounts[i].ID]
+		if hasCost && accounts[i].UsedPercent > 5 && cost > 0 {
+			estimatedTotal := cost / (accounts[i].UsedPercent / 100.0)
+			accounts[i].CycleCost = math.Round(cost*100) / 100
+			accounts[i].EstimatedTotalQuota = math.Round(estimatedTotal*100) / 100
+			accounts[i].RemainingUSD = math.Round(estimatedTotal*(1-accounts[i].UsedPercent/100.0)*100) / 100
+		} else {
+			accounts[i].EstimatedTotalQuota = defaultQuota
+			accounts[i].RemainingUSD = math.Round(defaultQuota*(1-accounts[i].UsedPercent/100.0)*100) / 100
+			if hasCost {
+				accounts[i].CycleCost = math.Round(cost*100) / 100
+			}
+		}
+	}
+
+	bucketDefs := []struct {
+		label      string
+		minPercent int
+		maxPercent int
+	}{{"0-10%", 0, 10}, {"11-30%", 11, 30}, {"31-50%", 31, 50}, {"51-70%", 51, 70}, {"71-90%", 71, 90}, {"91-100%", 91, 100}}
+
+	buckets := make([]groupQuotaBucket, len(bucketDefs))
+	for i, def := range bucketDefs {
+		buckets[i] = groupQuotaBucket{Range: def.label, MinPercent: def.minPercent, MaxPercent: def.maxPercent}
+	}
+
+	totalUsed := 0.0
+	totalQuota := 0.0
+	for _, acc := range accounts {
+		totalUsed += acc.EstimatedTotalQuota * acc.UsedPercent / 100.0
+		totalQuota += acc.EstimatedTotalQuota
+		for i, def := range bucketDefs {
+			if int(math.Round(acc.UsedPercent)) >= def.minPercent && int(math.Round(acc.UsedPercent)) <= def.maxPercent {
+				buckets[i].Count++
+				buckets[i].RemainingUSD += acc.RemainingUSD
+				break
+			}
+		}
+	}
+
+	totalAccounts := len(accounts)
+	remaining := totalQuota - totalUsed
+
+	for i := range buckets {
+		buckets[i].RemainingUSD = math.Round(buckets[i].RemainingUSD*100) / 100
+	}
+
+	slog.InfoContext(r.Context(), "group quota computed", "site_id", siteID, "group", groupName, "total_accounts", totalAccounts, "remaining_usd", remaining, "accurate", accurateEstimate, "cached", false)
+	resp := groupQuotaResponse{
+		Group:               groupName,
+		GroupID:             groupID,
+		TotalAccounts:       totalAccounts,
+		TotalQuotaUSD:       math.Round(totalQuota*100) / 100,
+		UsedQuotaUSD:        math.Round(totalUsed*100) / 100,
+		RemainingUSD:        math.Round(remaining*100) / 100,
+		DefaultQuotaPerAcct: defaultQuota,
+		AccurateEstimate:    accurateEstimate,
+		Buckets:             buckets,
+		Accounts:            accounts,
+	}
+
+	groupQuotaCacheMu.Lock()
+	groupQuotaCache[cacheKey] = groupQuotaCacheEntry{response: resp, cachedAt: time.Now()}
+	groupQuotaCacheMu.Unlock()
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func queryUsageCostsViaAPI(ctx context.Context, svc *sites.Service, siteID int64, accountIDs []int64, startDate, endDate string) (map[int64]float64, error) {
+	result := make(map[int64]float64)
+	if len(accountIDs) == 0 {
+		return result, nil
+	}
+	idSet := make(map[int64]bool, len(accountIDs))
+	for _, id := range accountIDs {
+		idSet[id] = true
+	}
+	page := 1
+	pageSize := 200
+	for {
+		query := url.Values{
+			"start_date": {startDate},
+			"end_date":   {endDate},
+			"page":       {strconv.Itoa(page)},
+			"page_size":  {strconv.Itoa(pageSize)},
+			"sort_by":    {"created_at"},
+			"sort_order": {"asc"},
+		}
+		data, statusCode, err := svc.AdminGET(ctx, siteID, "/api/v1/admin/usage", query)
+		if err != nil {
+			return nil, err
+		}
+		if statusCode != http.StatusOK {
+			return nil, fmt.Errorf("usage API returned status %d", statusCode)
+		}
+		var usageResp struct {
+			Data struct {
+				Items []struct {
+					AccountID int64   `json:"account_id"`
+					TotalCost float64 `json:"total_cost"`
+				} `json:"items"`
+				Total int64 `json:"total"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(data, &usageResp); err != nil {
+			return nil, fmt.Errorf("failed to parse usage response: %w", err)
+		}
+		for _, item := range usageResp.Data.Items {
+			if idSet[item.AccountID] {
+				result[item.AccountID] += item.TotalCost
+			}
+		}
+		if len(usageResp.Data.Items) < pageSize {
+			break
+		}
+		if usageResp.Data.Total > 0 && int64(page*pageSize) >= usageResp.Data.Total {
+			break
+		}
+		page++
+		if page > 100 {
+			break
+		}
+	}
+	return result, nil
+}
+
+func extractIntValue(extra map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		if v := extra[key]; v != nil {
+			s := strings.TrimSpace(fmt.Sprint(v))
+			if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+				return n
+			}
+			if f, err := strconv.ParseFloat(s, 64); err == nil {
+				return int64(f)
+			}
+		}
+	}
+	return 0
+}
+
+func extractUsagePercentFloat(extra map[string]any, keys ...string) float64 {
+	for _, key := range keys {
+		if v := extra[key]; v != nil {
+			s := strings.TrimSpace(strings.TrimSuffix(fmt.Sprint(v), "%"))
+			if n, err := strconv.ParseFloat(s, 64); err == nil {
+				return math.Max(0, math.Min(100, n))
+			}
+		}
+	}
+	return 0
 }
 
 func writeErrorAccounts(w http.ResponseWriter, r *http.Request, authMgr *auth.Manager, svc *sites.Service, siteID int64) {
