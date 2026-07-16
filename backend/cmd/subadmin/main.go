@@ -2848,6 +2848,9 @@ func parseKnownTestHint(text string) (string, string) {
 	if strings.Contains(lower, "token_invalidated") || strings.Contains(lower, "invalidated oauth token") {
 		return "令牌失效", ""
 	}
+	if strings.Contains(lower, "deactivated_workspace") {
+		return "工作区失效", ""
+	}
 	if strings.Contains(lower, "context deadline exceeded") || strings.Contains(lower, "timeout") || strings.Contains(lower, "timed out") || strings.Contains(lower, "connection reset") || strings.Contains(lower, "connection refused") {
 		return "网络或超时异常", ""
 	}
