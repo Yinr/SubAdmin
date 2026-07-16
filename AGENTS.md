@@ -30,6 +30,19 @@ This directory contains the management application for sub2api.
 - Store session tokens as hashes, not plaintext.
 - Encrypt site admin keys at rest.
 
+## Version Control Discipline
+
+- **Clean workspace before new work.** Before starting a new feature or fix, ensure the working tree is clean. If dirty, evaluate existing changes: commit them if they form a coherent unit, otherwise stash or branch to prevent unrelated changes from mixing. When uncertain, ask the user how to proceed.
+- **Commit when coherent.** As soon as a set of changes is complete and self-consistent, commit and push. Do not accumulate unrelated changes across features or fixes.
+- **Pre-commit checklist.** Before every commit:
+  1. Build compiles (`go build`) and tests pass (`go test`).
+  2. Frontend builds without errors (`npm run build`) if web sources changed.
+  3. Related documentation (`PLAN.md`, `AGENTS.md`, `docs/`) is updated to reflect the change.
+  4. No sensitive data (secrets, local paths, personal info) in the diff or commit message.
+  5. Commit message follows conventional format: `type: concise description` (types: feat, fix, docs, chore, refactor, test).
+  6. Push immediately after committing.
+- **Incomplete work documentation.** If a change cannot be finished in the current session, record its state in `PLAN.md` under a dedicated section or in a `WIP.md` file at the project root. Include: the goal of the change, what has been done, what remains, and where the work is blocked. This ensures the next session or agent can understand the workspace state and decide whether to commit the partial work.
+
 ## Implementation Notes
 - Keep files ASCII unless the file already uses other characters.
 - Use `apply_patch` for file edits.
