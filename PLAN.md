@@ -41,6 +41,12 @@ Implemented capabilities:
 - Protected OpenAPI, Swagger UI, and AI reference docs are available inside the logged-in UI.
 - Documentation has been refreshed to track sub2api `v0.1.133`; backend or frontend behavior changes still need explicit verification before follow-up work.
 - Frontend structure now separates top-level App orchestration from Import, Audit, and Docs views, with shared helpers for API calls, formatting, visual metrics, import settings, and account display.
+- Account test hint recognition covers token revocation, token invalidation, deactivated workspace, network/timeout errors, upstream auth failures, Cloudflare blocks, upstream server errors, and rate-limit/quota exhaustion with plan type and reset time.
+- Batch test default model pre-fills gpt-5.5; clearing the field falls back to sub2api platform defaults.
+- Search-by-names API and SearchView support batch keyword account lookup with per-keyword error reporting and truncation metadata.
+- Error accounts API and ErrorAccountsView list status=error accounts by group with local handled/unhandled tracking and email copy helpers.
+- Group quota API and GroupQuotaView estimate per-account quota using usage API cycle costs, with 24h cache, bucket distribution, and sortable account table.
+- Shared CSS (shared.css) provides sa-* utility classes for view components.
 
 ## Completed Areas
 
