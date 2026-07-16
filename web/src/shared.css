@@ -1,0 +1,36 @@
+/* Shared styles for subAdmin views (SearchView, ErrorAccountsView, GroupQuotaView, etc.) */
+.sa-panel { padding: 18px; border: 1px solid rgba(148,163,184,0.18); border-radius: 22px; background: rgba(15,23,42,0.88); box-shadow: 0 24px 80px rgba(0,0,0,0.28); }
+.sa-panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
+.sa-panel-head h2 { margin: 0; }
+.sa-panel-head .sa-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.sa-muted { color: #94a3b8; }
+.sa-error { color: #fecaca; }
+.sa-input { width: 100%; box-sizing: border-box; padding: 12px 13px; border: 1px solid rgba(148,163,184,0.28); border-radius: 12px; color: #f8fafc; background: rgba(15,23,42,0.86); outline: none; font-size: 14px; }
+.sa-input:focus { border-color: rgba(139,92,246,0.5); }
+.sa-btn { border: 0; border-radius: 12px; padding: 11px 14px; color: #fff; background: linear-gradient(135deg,#7c3aed,#2563eb); cursor: pointer; font-weight: 700; font-size: 14px; }
+.sa-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.sa-btn-secondary { background: rgba(148,163,184,0.14); color: #e2e8f0; }
+.sa-btn-mini { padding: 5px 8px; border-radius: 9px; background: rgba(148,163,184,0.14); color: #e2e8f0; font-size: 12px; border: 0; cursor: pointer; }
+.sa-table-wrap { overflow-x: auto; margin-top: 12px; }
+.sa-table { width: 100%; border-collapse: collapse; }
+.sa-table th, .sa-table td { padding: 12px 10px; border-bottom: 1px solid rgba(148,163,184,0.16); text-align: left; vertical-align: top; font-size: 13px; }
+.sa-table th { color: #cbd5e1; font-size: 14px; }
+.sa-table td { color: #e2e8f0; }
+.sa-tag { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; background: rgba(148,163,184,0.14); color: #e2e8f0; font-size: 12px; line-height: 1.2; white-space: nowrap; }
+.sa-tag-muted { opacity: 0.78; }
+.sa-cell-stack { display: grid; gap: 6px; }
+.sa-cell-stack.compact { gap: 8px; }
+.sa-cell-subtitle { font-size: 12px; }
+.sa-account-name { display: block; max-width: 280px; overflow-wrap: anywhere; line-height: 1.35; }
+.sa-checkbox { width: auto; }
+.sa-row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sa-filter-chip { padding: 6px 10px; border-radius: 999px; background: rgba(59,130,246,0.14); color: #dbeafe; font-size: 12px; border: 0; cursor: pointer; }
+.sa-filter-chip.active { background: linear-gradient(135deg,rgba(124,58,237,0.9),rgba(37,99,235,0.86)); color: #fff; }
+.sa-usage-row { display: grid; grid-template-columns: 36px minmax(90px,1fr) 54px; gap: 8px; align-items: center; }
+.sa-usage-meta { color: #cbd5e1; font-size: 12px; }
+.sa-usage-bar-shell { height: 8px; overflow: hidden; border-radius: 999px; background: rgba(148,163,184,0.18); }
+.sa-usage-bar { height: 100%; border-radius: inherit; background: linear-gradient(90deg,#22c55e,#38bdf8,#8b5cf6); }
+.sa-usage-bar.unknown { width: 0 !important; background: rgba(148,163,184,0.42); }
+.sa-usage-bar.warn { background: linear-gradient(90deg,#f59e0b,#f97316); }
+.sa-usage-bar.danger { background: linear-gradient(90deg,#ef4444,#dc2626); }
+.sa-usage-value { color: #f8fafc; font-size: 12px; }
