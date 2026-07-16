@@ -226,6 +226,14 @@ func main() {
 			_, _ = w.Write(data)
 			return
 		}
+		if action == "accounts/search-by-names" {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeAccountsSearchByNames(w, r, siteService, id)
+			return
+		}
 		if action == "accounts/refresh" {
 			if r.Method != http.MethodPost {
 				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -497,6 +505,8 @@ func routeGroup(path string) string {
 		return "health"
 	case strings.HasPrefix(path, "/api/auth"):
 		return "auth"
+	case strings.HasPrefix(path, "/api/sites") && strings.Contains(path, "search-by-names"):
+		return "accounts/search-by-names"
 	case strings.HasPrefix(path, "/api/sites"):
 		return "sites"
 	case strings.HasPrefix(path, "/api/jobs"):
@@ -2614,6 +2624,126 @@ func writeBatchAccountRefresh(w http.ResponseWriter, r *http.Request, siteServic
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_, _ = w.Write(sanitizeJSONForBrowser(data))
+}
+
+func writeAccountsSearchByNames(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
+	var input struct {
+		Names        []string `json:"names"`
+		SkipComments bool     `json:"skipComments"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	keywords := make([]string, 0, len(input.Names))
+	seen := make(map[string]bool, len(input.Names))
+	for _, raw := range input.Names {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if input.SkipComments && strings.HasPrefix(line, "#") {
+			continue
+		}
+		if seen[line] {
+			continue
+		}
+		seen[line] = true
+		keywords = append(keywords, line)
+	}
+	if len(keywords) == 0 {
+		writeError(w, http.StatusBadRequest, "names is required")
+		return
+	}
+	if len(keywords) > 50 {
+		writeError(w, http.StatusBadRequest, "too many keywords (max 50)")
+		return
+	}
+	type keywordResult struct {
+		Keyword    string           `json:"keyword"`
+		Accounts   []map[string]any `json:"accounts"`
+		Total      int64            `json:"total"`
+		Returned   int              `json:"returned"`
+		Truncated  bool             `json:"truncated"`
+		Error      string           `json:"error,omitempty"`
+		StatusCode int              `json:"statusCode,omitempty"`
+	}
+	items := make([]keywordResult, 0, len(keywords))
+	for _, keyword := range keywords {
+		query := url.Values{}
+		query.Set("search", keyword)
+		query.Set("page_size", "100")
+		data, statusCode, err := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/accounts", query)
+		if err != nil {
+			slog.WarnContext(r.Context(), "search-by-names keyword failed", "site_id", siteID, "keyword", keyword, "error", err)
+			items = append(items, keywordResult{Keyword: keyword, Accounts: []map[string]any{}, Error: err.Error()})
+			continue
+		}
+		if statusCode < 200 || statusCode >= 300 {
+			slog.WarnContext(r.Context(), "search-by-names keyword upstream error", "site_id", siteID, "keyword", keyword, "status_code", statusCode)
+			items = append(items, keywordResult{Keyword: keyword, Accounts: []map[string]any{}, Error: upstreamErrorMessage(data), StatusCode: statusCode})
+			continue
+		}
+		sanitized := sanitizeJSONForBrowser(data)
+		parsed := decodeJSONValue(sanitized)
+		accounts := extractAccountList(parsed)
+		total := int64(len(accounts))
+		if parsedTotal, ok := paginatedTotal(parsed); ok {
+			total = parsedTotal
+		}
+		returned := len(accounts)
+		items = append(items, keywordResult{Keyword: keyword, Accounts: accounts, Total: total, Returned: returned, Truncated: total > int64(returned)})
+	}
+	slog.InfoContext(r.Context(), "search-by-names completed", "site_id", siteID, "keyword_count", len(keywords))
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func upstreamErrorMessage(data []byte) string {
+	value := decodeJSONValue(sanitizeJSONForBrowser(data))
+	root, ok := value.(map[string]any)
+	if !ok {
+		return "upstream request failed"
+	}
+	if message, ok := root["error"].(string); ok && strings.TrimSpace(message) != "" {
+		return message
+	}
+	if message, ok := root["message"].(string); ok && strings.TrimSpace(message) != "" {
+		return message
+	}
+	if data, ok := root["data"].(map[string]any); ok {
+		if message, ok := data["error"].(string); ok && strings.TrimSpace(message) != "" {
+			return message
+		}
+		if message, ok := data["message"].(string); ok && strings.TrimSpace(message) != "" {
+			return message
+		}
+	}
+	return "upstream request failed"
+}
+
+func extractAccountList(value any) []map[string]any {
+	if value == nil {
+		return nil
+	}
+	root, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	data, ok := root["data"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	items, ok := data["items"].([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		if m, ok := item.(map[string]any); ok {
+			result = append(result, m)
+		}
+	}
+	return result
 }
 
 func writeSiteStatistics(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {

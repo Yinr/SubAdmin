@@ -1,12 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"subadmin/internal/db"
+	"subadmin/internal/secretbox"
+	"subadmin/internal/sites"
 )
 
 func TestSanitizeJSONForBrowserRedactsSensitiveFields(t *testing.T) {
@@ -179,4 +186,188 @@ func stringSliceContains(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestWriteAccountsSearchByNamesQueriesUpstreamAndRedacts(t *testing.T) {
+	type upstreamCall struct {
+		Search   string
+		PageSize string
+		APIKey   string
+	}
+	var calls []upstreamCall
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/admin/accounts" {
+			t.Fatalf("upstream path = %q, want /api/v1/admin/accounts", r.URL.Path)
+		}
+		calls = append(calls, upstreamCall{Search: r.URL.Query().Get("search"), PageSize: r.URL.Query().Get("page_size"), APIKey: r.Header.Get("x-api-key")})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"items":[{"id":1,"name":"` + r.URL.Query().Get("search") + ` account","credentials":{"refresh_token":"secret-token"}}]}}`))
+	}))
+	defer server.Close()
+	svc, siteID := newTestSiteService(t, server.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/sites/1/accounts/search-by-names", bytes.NewReader([]byte(`{"names":[" alpha ","# note","alpha","beta",""],"skipComments":true}`)))
+
+	writeAccountsSearchByNames(rec, req, svc, siteID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if len(calls) != 2 {
+		t.Fatalf("upstream calls = %#v, want 2 effective keywords", calls)
+	}
+	for i, want := range []string{"alpha", "beta"} {
+		if calls[i].Search != want || calls[i].PageSize != "100" || calls[i].APIKey != "admin-key" {
+			t.Fatalf("call[%d] = %#v", i, calls[i])
+		}
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "secret-token") {
+		t.Fatalf("search response leaks credentials: %s", body)
+	}
+	var out struct {
+		Items []struct {
+			Keyword  string           `json:"keyword"`
+			Accounts []map[string]any `json:"accounts"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("invalid response json: %v", err)
+	}
+	if len(out.Items) != 2 || out.Items[0].Keyword != "alpha" || out.Items[1].Keyword != "beta" {
+		t.Fatalf("items = %#v, want alpha and beta", out.Items)
+	}
+}
+
+func TestWriteAccountsSearchByNamesRejectsTooManyKeywords(t *testing.T) {
+	upstreamCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+	}))
+	defer server.Close()
+	svc, siteID := newTestSiteService(t, server.URL)
+	names := make([]string, 51)
+	for i := range names {
+		names[i] = "keyword-" + string(rune('a'+i))
+	}
+	payload, err := json.Marshal(map[string]any{"names": names, "skipComments": true})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/sites/1/accounts/search-by-names", bytes.NewReader(payload))
+
+	writeAccountsSearchByNames(rec, req, svc, siteID)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("upstream calls = %d, want 0", upstreamCalls)
+	}
+}
+
+func TestWriteAccountsSearchByNamesReportsPerKeywordErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("search") {
+		case "ok":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"items":[{"id":7,"name":"ok account"}]}}`))
+		case "broken":
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "upstream unavailable"})
+		default:
+			t.Fatalf("unexpected search query: %q", r.URL.Query().Get("search"))
+		}
+	}))
+	defer server.Close()
+	svc, siteID := newTestSiteService(t, server.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/sites/1/accounts/search-by-names", bytes.NewReader([]byte(`{"names":["ok","broken"],"skipComments":true}`)))
+
+	writeAccountsSearchByNames(rec, req, svc, siteID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Items []struct {
+			Keyword    string           `json:"keyword"`
+			Accounts   []map[string]any `json:"accounts"`
+			Error      string           `json:"error"`
+			StatusCode int              `json:"statusCode"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("invalid response json: %v", err)
+	}
+	if len(out.Items) != 2 {
+		t.Fatalf("items length = %d, want 2", len(out.Items))
+	}
+	if out.Items[0].Keyword != "ok" || len(out.Items[0].Accounts) != 1 || out.Items[0].Error != "" {
+		t.Fatalf("ok item = %#v", out.Items[0])
+	}
+	if out.Items[1].Keyword != "broken" || out.Items[1].StatusCode != http.StatusBadGateway || !strings.Contains(out.Items[1].Error, "upstream unavailable") {
+		t.Fatalf("broken item = %#v, want explicit per-keyword upstream error", out.Items[1])
+	}
+}
+
+func TestWriteAccountsSearchByNamesReportsTruncatedResults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("search") != "broad" {
+			t.Fatalf("search = %q, want broad", r.URL.Query().Get("search"))
+		}
+		items := make([]map[string]any, 100)
+		for i := range items {
+			items[i] = map[string]any{"id": i + 1, "name": "broad account"}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"items": items, "total": 101, "page": 1, "page_size": 100, "pages": 2}})
+	}))
+	defer server.Close()
+	svc, siteID := newTestSiteService(t, server.URL)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/sites/1/accounts/search-by-names", bytes.NewReader([]byte(`{"names":["broad"],"skipComments":true}`)))
+
+	writeAccountsSearchByNames(rec, req, svc, siteID)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Items []struct {
+			Keyword   string           `json:"keyword"`
+			Accounts  []map[string]any `json:"accounts"`
+			Total     int64            `json:"total"`
+			Returned  int              `json:"returned"`
+			Truncated bool             `json:"truncated"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("invalid response json: %v", err)
+	}
+	if len(out.Items) != 1 {
+		t.Fatalf("items length = %d, want 1", len(out.Items))
+	}
+	item := out.Items[0]
+	if item.Keyword != "broad" || len(item.Accounts) != 100 || item.Total != 101 || item.Returned != 100 || !item.Truncated {
+		t.Fatalf("item = %#v, want visible truncation metadata", item)
+	}
+}
+
+func newTestSiteService(t *testing.T, baseURL string) (*sites.Service, int64) {
+	t.Helper()
+	store, err := db.Open(t.TempDir() + "/subadmin.db")
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	box, err := secretbox.New("test-secret")
+	if err != nil {
+		t.Fatalf("secretbox: %v", err)
+	}
+	svc := sites.NewService(store.DB(), box)
+	site, err := svc.Create(t.Context(), sites.CreateInput{Name: "test", BaseURL: baseURL, AdminKey: "admin-key"})
+	if err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	return svc, site.ID
 }
