@@ -166,7 +166,7 @@ const accountFilters = reactive({
 })
 
 const batchTestForm = reactive({
-  modelId: '',
+  modelId: 'gpt-5.5',
   prompt: '',
   mode: '',
   delayMs: 0,
