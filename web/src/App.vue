@@ -1619,7 +1619,7 @@ onUnmounted(() => {
             <div v-if="recentTrend.length" class="trend-panel">
               <div class="trend-chart-card">
                 <div class="trend-chart-frame">
-                  <svg viewBox="0 0 640 220" role="img" aria-label="请求与 Token 与成本趋势" @mousemove="handleChartMove" @mouseleave="clearChartHover">
+                  <svg viewBox="0 0 640 250" role="img" aria-label="请求与 Token 与成本趋势" @mousemove="handleChartMove" @mouseleave="clearChartHover">
                     <g transform="translate(56 18)">
                       <!-- Left Y axis (Tokens/Requests) -->
                       <line x1="0" y1="0" x2="0" y2="170" class="chart-axis" />
@@ -1633,6 +1633,10 @@ onUnmounted(() => {
                       <text x="528" y="4" class="chart-tick chart-tick-cost" text-anchor="start">${{ maxTrendCost.toFixed(2) }}</text>
                       <text x="528" y="89" class="chart-tick chart-tick-cost" text-anchor="start">${{ (maxTrendCost / 2).toFixed(2) }}</text>
                       <text x="528" y="174" class="chart-tick chart-tick-cost" text-anchor="start">$0</text>
+                      <!-- Vertical grid lines at each data point -->
+                      <line v-for="(_, i) in recentTrend" :key="'grid-' + i" :x1="chartX(i, recentTrend.length)" y1="0" :x2="chartX(i, recentTrend.length)" y2="170" class="chart-vgrid" />
+                      <!-- X axis date labels (show every 2nd for readability) -->
+                      <text v-for="(point, i) in recentTrend" :key="'x-' + i" :x="chartX(i, recentTrend.length)" :y="190" class="chart-x-tick" text-anchor="middle">{{ point.date?.slice(5) || '' }}</text>
                       <!-- Data lines -->
                       <path :d="chartPath(recentTrend, 'total_tokens')" class="chart-line tokens" />
                       <path :d="chartPath(recentTrend, 'requests')" class="chart-line requests" />
@@ -1656,7 +1660,6 @@ onUnmounted(() => {
                 </div>
                 <div class="chart-legend-row">
                   <div class="chart-legend"><span class="legend-token">Tokens</span><span class="legend-request">请求</span><span class="legend-cost">成本</span></div>
-                  <div class="chart-labels"><span>{{ recentTrend[0]?.date }}</span><span>{{ recentTrend[recentTrend.length - 1]?.date }}</span></div>
                 </div>
               </div>
               <div class="trend-summary-grid">
@@ -2466,6 +2469,8 @@ onUnmounted(() => {
 .trend-chart-frame svg { width: 100%; min-width: 600px; min-height: 240px; padding: 4px 0; overflow: visible; }
 .chart-axis { stroke: rgba(148, 163, 184, 0.38); stroke-width: 1; }
 .chart-grid { stroke: rgba(148, 163, 184, 0.18); stroke-width: 1; stroke-dasharray: 4 5; }
+.chart-vgrid { stroke: rgba(148, 163, 184, 0.1); stroke-width: 1; }
+.chart-x-tick { fill: #94a3b8; font-size: 10px; }
 .chart-line { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .chart-line.tokens { stroke: #8b5cf6; }
 .chart-line.requests { stroke: #22d3ee; }
