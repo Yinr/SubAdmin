@@ -199,12 +199,16 @@ function remainingYTick(v: number) {
 const quotaBuckets = computed(() => {
   if (!data.value || !data.value.accounts.length) return []
   const ranges = [
-    { label: '0-0.5', min: 0, max: 0.5 },
-    { label: '0.5-1', min: 0.5, max: 1 },
-    { label: '1-2', min: 1, max: 2 },
-    { label: '2-5', min: 2, max: 5 },
-    { label: '5-10', min: 5, max: 10 },
-    { label: '10+', min: 10, max: Infinity },
+    { label: '<2', min: 0, max: 2 },
+    { label: '2-3', min: 2, max: 3 },
+    { label: '3-4', min: 3, max: 4 },
+    { label: '4-5', min: 4, max: 5 },
+    { label: '5-6', min: 5, max: 6 },
+    { label: '6-7', min: 6, max: 7 },
+    { label: '7-8', min: 7, max: 8 },
+    { label: '8-9', min: 8, max: 9 },
+    { label: '9-10', min: 9, max: 10 },
+    { label: '≥10', min: 10, max: Infinity },
   ]
   return ranges.map(r => ({
     ...r,
