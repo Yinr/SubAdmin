@@ -319,6 +319,7 @@ const recentTrend = computed(() => statisticsTrend.value.slice(-12))
 const maxRankingCost = computed(() => Math.max(1, ...statisticsRanking.value.map((user) => Number(user.actual_cost || 0))))
 const maxTrendTokens = computed(() => Math.max(1, ...recentTrend.value.map((point) => Number(point.total_tokens || 0))))
 const maxTrendRequests = computed(() => Math.max(1, ...recentTrend.value.map((point) => Number(point.requests || 0))))
+const maxTrendCost = computed(() => Math.max(0.01, ...recentTrend.value.map((point) => Number(point.cost || 0))))
 const chartHoverPoint = computed(() => chartHoverIndex.value === null ? null : recentTrend.value[chartHoverIndex.value] || null)
 
 const dashboardStats = computed(() => {
@@ -1606,7 +1607,7 @@ onUnmounted(() => {
             <div v-if="recentTrend.length" class="trend-panel">
               <div class="trend-chart-card">
                 <div class="trend-chart-frame">
-                  <svg viewBox="0 0 600 220" role="img" aria-label="请求与 Token 趋势" @mousemove="handleChartMove" @mouseleave="clearChartHover">
+                  <svg viewBox="0 0 600 220" role="img" aria-label="请求与 Token 与成本趋势" @mousemove="handleChartMove" @mouseleave="clearChartHover">
                     <g transform="translate(56 18)">
                       <line x1="0" y1="0" x2="0" y2="170" class="chart-axis" />
                       <line x1="0" y1="170" x2="520" y2="170" class="chart-axis" />
@@ -1616,29 +1617,33 @@ onUnmounted(() => {
                       <text x="-8" y="174" class="chart-tick" text-anchor="end">0</text>
                       <path :d="chartPath(recentTrend, 'total_tokens')" class="chart-line tokens" />
                       <path :d="chartPath(recentTrend, 'requests')" class="chart-line requests" />
+                      <path :d="chartPath(recentTrend, 'cost')" class="chart-line cost" />
                       <g v-if="chartHoverPoint && chartHoverIndex !== null" class="chart-hover">
                         <line :x1="chartX(chartHoverIndex, recentTrend.length)" y1="0" :x2="chartX(chartHoverIndex, recentTrend.length)" y2="170" class="chart-hover-line" />
                         <circle :cx="chartX(chartHoverIndex, recentTrend.length)" :cy="chartY(chartHoverPoint, 'total_tokens', maxTrendTokens)" r="4" class="chart-dot tokens" />
                         <circle :cx="chartX(chartHoverIndex, recentTrend.length)" :cy="chartY(chartHoverPoint, 'requests', maxTrendRequests)" r="4" class="chart-dot requests" />
+                        <circle :cx="chartX(chartHoverIndex, recentTrend.length)" :cy="chartY(chartHoverPoint, 'cost', maxTrendCost)" r="4" class="chart-dot cost" />
                       </g>
                     </g>
-                    <foreignObject v-if="chartHoverPoint" x="350" y="18" width="230" height="90">
+                    <foreignObject v-if="chartHoverPoint" x="350" y="18" width="230" height="110">
                       <div class="chart-tooltip">
                         <strong>{{ chartHoverPoint.date }}</strong>
                         <span>Tokens：{{ tokenValue(chartHoverPoint, 'total_tokens') }}</span>
                         <span>请求：{{ statValue(chartHoverPoint, 'requests') }}</span>
+                        <span>成本：{{ statCost(chartHoverPoint, 'cost') }}</span>
                       </div>
                     </foreignObject>
                   </svg>
                 </div>
                 <div class="chart-legend-row">
-                  <div class="chart-legend"><span class="legend-token">Tokens</span><span class="legend-request">请求</span></div>
+                  <div class="chart-legend"><span class="legend-token">Tokens</span><span class="legend-request">请求</span><span class="legend-cost">成本</span></div>
                   <div class="chart-labels"><span>{{ recentTrend[0]?.date }}</span><span>{{ recentTrend[recentTrend.length - 1]?.date }}</span></div>
                 </div>
               </div>
               <div class="trend-summary-grid">
                 <article class="trend-summary-card"><span>总 Tokens</span><strong>{{ tokenValue(statisticsStats, 'total_tokens') }}</strong></article>
                 <article class="trend-summary-card"><span>总请求</span><strong>{{ statValue(statisticsStats, 'total_requests') }}</strong></article>
+                <article class="trend-summary-card"><span>总成本</span><strong>{{ statCost(statisticsStats, 'total_account_cost') }}</strong></article>
               </div>
             </div>
             <p v-else class="muted">暂无趋势数据。</p>
@@ -2445,10 +2450,12 @@ onUnmounted(() => {
 .chart-line { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .chart-line.tokens { stroke: #8b5cf6; }
 .chart-line.requests { stroke: #22d3ee; }
+.chart-line.cost { stroke: #f59e0b; stroke-dasharray: 6 4; }
 .chart-tick { fill: #94a3b8; font-size: 11px; }
 .chart-hover-line { stroke: rgba(226, 232, 240, 0.35); stroke-width: 1; stroke-dasharray: 4 4; }
 .chart-dot.tokens { fill: #8b5cf6; stroke: #0f172a; stroke-width: 2; }
 .chart-dot.requests { fill: #22d3ee; stroke: #0f172a; stroke-width: 2; }
+.chart-dot.cost { fill: #f59e0b; stroke: #0f172a; stroke-width: 2; }
 .chart-tooltip { display: grid; gap: 4px; box-sizing: border-box; padding: 9px 10px; border: 1px solid rgba(148, 163, 184, 0.24); border-radius: 12px; background: rgba(2, 6, 23, 0.88); color: #e2e8f0; font-size: 12px; }
 .chart-tooltip strong { color: #fff; }
 .chart-legend-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
@@ -2457,9 +2464,10 @@ onUnmounted(() => {
 .trend-summary-card { padding: 12px 14px; border: 1px solid rgba(148, 163, 184, 0.12); border-radius: 14px; background: rgba(2, 6, 23, 0.2); }
 .trend-summary-card span { display: block; color: #94a3b8; font-size: 12px; }
 .trend-summary-card strong { display: block; margin-top: 6px; color: #fff; font-size: 20px; }
-.legend-token::before, .legend-request::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 99px; }
+.legend-token::before, .legend-request::before, .legend-cost::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 99px; }
 .legend-token::before { background: #8b5cf6; }
 .legend-request::before { background: #22d3ee; }
+.legend-cost::before { background: #f59e0b; }
 .full-scroll { overflow: auto; max-width: 100%; }
 .full-scroll .mini-table { min-width: 620px; table-layout: fixed; }
 .fit-table .mini-table { min-width: 320px; }
