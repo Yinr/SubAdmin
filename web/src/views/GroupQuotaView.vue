@@ -438,10 +438,10 @@ onMounted(() => { loadQuota() })
 .quota-tab { padding: 7px 16px; border-radius: 9px; background: transparent; color: #94a3b8; font-size: 13px; font-weight: 700; border: 0; cursor: pointer; }
 .quota-tab.active { color: #fff; background: linear-gradient(135deg, #7c3aed, #2563eb); }
 
-.quota-chart-section { display: grid; gap: 18px; }
+.quota-chart-section { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 560px)); gap: 18px; }
 .quota-chart-card { padding: 16px; border: 1px solid rgba(148,163,184,0.16); border-radius: 16px; background: rgba(2,6,23,0.24); }
 .quota-chart-card h3 { margin: 0 0 4px; font-size: 15px; }
-.quota-chart-svg { width: 100%; min-width: 400px; overflow: visible; }
+.quota-chart-svg { width: 100%; overflow: visible; }
 
 .qchart-axis { stroke: rgba(148,163,184,0.38); stroke-width: 1; }
 .qchart-grid { stroke: rgba(148,163,184,0.18); stroke-width: 1; stroke-dasharray: 4 5; }
