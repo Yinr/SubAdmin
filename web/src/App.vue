@@ -707,9 +707,21 @@ function userDisplayName(user: Record<string, unknown>) {
 
 function handleChartMove(event: MouseEvent) {
   if (!recentTrend.value.length) return
-  const rect = (event.currentTarget as SVGElement).getBoundingClientRect()
-  const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
-  chartHoverIndex.value = Math.round(ratio * (recentTrend.value.length - 1))
+  const svg = event.currentTarget as SVGElement
+  const rect = svg.getBoundingClientRect()
+  // Chart data area: left=56, right=56+520=576 out of viewBox width 640
+  // Map pixel position to viewBox coordinates
+  const viewBoxW = 640
+  const pixelX = event.clientX - rect.left
+  const vbX = pixelX / rect.width * viewBoxW
+  const chartLeft = 56
+  const chartRight = 576
+  if (vbX < chartLeft || vbX > chartRight) {
+    chartHoverIndex.value = null
+    return
+  }
+  const ratio = (vbX - chartLeft) / (chartRight - chartLeft)
+  chartHoverIndex.value = Math.min(recentTrend.value.length - 1, Math.max(0, Math.round(ratio * (recentTrend.value.length - 1))))
 }
 
 function clearChartHover() {
@@ -1607,14 +1619,21 @@ onUnmounted(() => {
             <div v-if="recentTrend.length" class="trend-panel">
               <div class="trend-chart-card">
                 <div class="trend-chart-frame">
-                  <svg viewBox="0 0 600 220" role="img" aria-label="请求与 Token 与成本趋势" @mousemove="handleChartMove" @mouseleave="clearChartHover">
+                  <svg viewBox="0 0 640 220" role="img" aria-label="请求与 Token 与成本趋势" @mousemove="handleChartMove" @mouseleave="clearChartHover">
                     <g transform="translate(56 18)">
+                      <!-- Left Y axis (Tokens/Requests) -->
                       <line x1="0" y1="0" x2="0" y2="170" class="chart-axis" />
                       <line x1="0" y1="170" x2="520" y2="170" class="chart-axis" />
                       <line x1="0" y1="85" x2="520" y2="85" class="chart-grid" />
                       <text x="-8" y="4" class="chart-tick" text-anchor="end">{{ chartAxisLabel(maxTrendTokens) }}</text>
                       <text x="-8" y="89" class="chart-tick" text-anchor="end">{{ chartAxisLabel(maxTrendTokens / 2) }}</text>
                       <text x="-8" y="174" class="chart-tick" text-anchor="end">0</text>
+                      <!-- Right Y axis (Cost) -->
+                      <line x1="520" y1="0" x2="520" y2="170" class="chart-axis" />
+                      <text x="528" y="4" class="chart-tick chart-tick-cost" text-anchor="start">${{ maxTrendCost.toFixed(2) }}</text>
+                      <text x="528" y="89" class="chart-tick chart-tick-cost" text-anchor="start">${{ (maxTrendCost / 2).toFixed(2) }}</text>
+                      <text x="528" y="174" class="chart-tick chart-tick-cost" text-anchor="start">$0</text>
+                      <!-- Data lines -->
                       <path :d="chartPath(recentTrend, 'total_tokens')" class="chart-line tokens" />
                       <path :d="chartPath(recentTrend, 'requests')" class="chart-line requests" />
                       <path :d="chartPath(recentTrend, 'cost')" class="chart-line cost" />
@@ -2452,6 +2471,7 @@ onUnmounted(() => {
 .chart-line.requests { stroke: #22d3ee; }
 .chart-line.cost { stroke: #f59e0b; stroke-dasharray: 6 4; }
 .chart-tick { fill: #94a3b8; font-size: 11px; }
+.chart-tick-cost { fill: #f59e0b; }
 .chart-hover-line { stroke: rgba(226, 232, 240, 0.35); stroke-width: 1; stroke-dasharray: 4 4; }
 .chart-dot.tokens { fill: #8b5cf6; stroke: #0f172a; stroke-width: 2; }
 .chart-dot.requests { fill: #22d3ee; stroke: #0f172a; stroke-width: 2; }
