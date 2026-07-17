@@ -210,10 +210,14 @@ const quotaBuckets = computed(() => {
     { label: '9-10', min: 9, max: 10 },
     { label: '≥10', min: 10, max: Infinity },
   ]
-  return ranges.map(r => ({
+  const counted = ranges.map(r => ({
     ...r,
     count: data.value!.accounts.filter(a => a.estimatedTotalQuota >= r.min && a.estimatedTotalQuota < r.max).length,
   }))
+  // Trim trailing zero-count buckets from the high end
+  let lastNonZero = counted.length - 1
+  while (lastNonZero > 0 && counted[lastNonZero].count === 0) lastNonZero--
+  return counted.slice(0, lastNonZero + 1)
 })
 
 const quotaChartWidth = 520
