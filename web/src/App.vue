@@ -772,6 +772,7 @@ async function loadAccounts(options: { force?: boolean } = {}) {
   }
   const requestSeq = ++accountRequestSeq
   const params = buildAccountQuery(accountPager.page, accountPager.pageSize)
+  params.set('lite', '1')
   const cacheKey = `${activeSiteId.value}?${params.toString()}`
   const cached = accountCache.get(cacheKey)
   if (!options.force && cached && cached.expiresAt > Date.now()) {
@@ -984,6 +985,11 @@ function toggleAllVisibleAccounts() {
   selectedAccountIds.value = next
 }
 
+function hasLocalFilters() {
+  if (scheduleQuickFilter.value !== 'all') return true
+  return Object.values(groupFilterStates).some((s) => s !== 'neutral')
+}
+
 async function selectAllFilteredAccounts() {
   batchTestError.value = ''
   if (!activeSiteId.value) {
@@ -996,6 +1002,33 @@ async function selectAllFilteredAccounts() {
     selectedAccountIds.value = new Set(cachedIDs.map((id) => String(id)))
     return cachedIDs
   }
+
+  // Fast path: server-side ID collection when no local filters are active
+  if (!hasLocalFilters()) {
+    batchCollecting.value = true
+    batchCollectPage.value = 0
+    batchCollectTotalPages.value = 1
+    batchCollectFound.value = 0
+    try {
+      const params = buildAccountQuery(1, 100)
+      const result = await api<{ ids: number[]; total: number }>(`api/sites/${activeSiteId.value}/accounts/filtered-ids?${params.toString()}`, {
+        method: 'POST',
+        body: '{}',
+      })
+      const numericIDs = (result.ids || []).filter((id) => Number.isFinite(id) && id > 0)
+      batchCollectFound.value = numericIDs.length
+      filteredAccountIDsCache.set(cacheKey, numericIDs)
+      selectedAccountIds.value = new Set(numericIDs.map((id) => String(id)))
+      return numericIDs
+    } catch (error) {
+      batchTestError.value = error instanceof Error ? error.message : '收集筛选账号失败'
+      return []
+    } finally {
+      batchCollecting.value = false
+    }
+  }
+
+  // Slow path: client-side pagination with local filters
   batchCollecting.value = true
   batchCollectPage.value = 0
   batchCollectTotalPages.value = 0
@@ -1006,6 +1039,7 @@ async function selectAllFilteredAccounts() {
   try {
     while (true) {
       const params = buildAccountQuery(page, pageSize)
+      params.set('lite', '1')
       const payload = await api<any>(`api/sites/${activeSiteId.value}/accounts?${params.toString()}`)
       const pageAccounts = normalizeAccounts(payload)
       rememberAccountMeta(pageAccounts)

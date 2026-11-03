@@ -1,0 +1,20 @@
+[Unit]
+Description=SubAdmin management service
+Documentation=file:/root/subAdmin/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/subAdmin/backend
+EnvironmentFile=/root/subAdmin/.env
+ExecStart=/root/subAdmin/backend/subadmin
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+SyslogIdentifier=subadmin
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

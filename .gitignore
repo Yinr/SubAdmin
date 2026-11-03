@@ -17,3 +17,4 @@ logs/
 .env
 .env.*
 !.env.example
+backend/cmd/subadmin/subadmin

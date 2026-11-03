@@ -220,10 +220,16 @@ func main() {
 				writeSiteError(w, err)
 				return
 			}
-			slog.InfoContext(r.Context(), "accounts proxied", "site_id", id, "status_code", statusCode, "response_bytes", len(data), "query_keys", sortedQueryKeys(query))
+			slog.InfoContext(r.Context(), "accounts proxied", "site_id", id, "status_code", statusCode, "upstream_bytes", len(data), "query_keys", sortedQueryKeys(query))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(statusCode)
 			data = sanitizeJSONForBrowser(data)
+			isLite := query.Get("lite") == "1"
+			if isLite {
+				before := len(data)
+				data = liteTrimAccountList(data)
+				slog.InfoContext(r.Context(), "accounts lite trimmed", "site_id", id, "before", before, "after", len(data), "saved_pct", (before-len(data))*100/before)
+			}
 			_, _ = w.Write(data)
 			return
 		}
@@ -233,6 +239,22 @@ func main() {
 				return
 			}
 			writeAccountsSearchByNames(w, r, siteService, id)
+			return
+		}
+		if action == "accounts/usage/batch" {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeBatchUsage(w, r, siteService, id)
+			return
+		}
+		if action == "accounts/filtered-ids" {
+			if r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			writeFilteredAccountIDs(w, r, siteService, id)
 			return
 		}
 		if action == "accounts/refresh" {
@@ -516,6 +538,8 @@ func routeGroup(path string) string {
 		return "auth"
 	case strings.HasPrefix(path, "/api/sites") && strings.Contains(path, "search-by-names"):
 		return "accounts/search-by-names"
+	case strings.HasPrefix(path, "/api/sites") && strings.Contains(path, "filtered-ids"):
+		return "accounts/filtered-ids"
 	case strings.HasPrefix(path, "/api/sites") && strings.Contains(path, "group-quota"):
 		return "group-quota"
 	case strings.HasPrefix(path, "/api/sites") && strings.Contains(path, "error-accounts"):
@@ -614,6 +638,149 @@ func isSensitiveKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+// liteTrimAccountList trims account list response for lite mode.
+// In lite mode we remove heavy fields that are unnecessary for ID collection
+// or basic display: full group objects become {id,name}, extra is trimmed to
+// only usage-related keys, and account_groups items lose their nested account/group.
+func liteTrimAccountList(data []byte) []byte {
+	var root any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return data
+	}
+
+	// Navigate to items array: try data.items and data.data.items
+	items := findItemsSlice(root)
+	if items == nil {
+		return data // not a recognizable accounts list, return as-is
+	}
+
+	for _, item := range items {
+		account, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		// Trim groups to [{id,name}] only
+		if groups, ok := account["groups"]; ok {
+			if arr, ok := groups.([]any); ok {
+				account["groups"] = liteTrimGroups(arr)
+			}
+		}
+
+		// Trim account_groups: keep id+priority+group_lite, drop nested account
+		if ags, ok := account["account_groups"]; ok {
+			if arr, ok := ags.([]any); ok {
+				account["account_groups"] = liteTrimAccountGroups(arr)
+			}
+		}
+
+		// Trim extra: keep only usage-related and display keys
+		if extra, ok := account["extra"]; ok {
+			if m, ok := extra.(map[string]any); ok {
+				account["extra"] = liteTrimExtra(m)
+			}
+		}
+	}
+
+	trimmed, err := json.Marshal(root)
+	if err != nil {
+		return data
+	}
+	return trimmed
+}
+
+func findItemsSlice(root any) []any {
+	switch v := root.(type) {
+	case map[string]any:
+		// data.items
+		if data, ok := v["data"]; ok {
+			if dm, ok := data.(map[string]any); ok {
+				if items, ok := dm["items"]; ok {
+					if arr, ok := items.([]any); ok {
+						return arr
+					}
+				}
+			}
+		}
+		// direct items
+		if items, ok := v["items"]; ok {
+			if arr, ok := items.([]any); ok {
+				return arr
+			}
+		}
+	}
+	return nil
+}
+
+func liteTrimGroups(groups []any) []any {
+	result := make([]any, 0, len(groups))
+	for _, g := range groups {
+		m, ok := g.(map[string]any)
+		if !ok {
+			result = append(result, g)
+			continue
+		}
+		lite := make(map[string]any, 2)
+		if id, ok := m["id"]; ok {
+			lite["id"] = id
+		}
+		if name, ok := m["name"]; ok {
+			lite["name"] = name
+		}
+		result = append(result, lite)
+	}
+	return result
+}
+
+func liteTrimAccountGroups(ags []any) []any {
+	result := make([]any, 0, len(ags))
+	for _, ag := range ags {
+		m, ok := ag.(map[string]any)
+		if !ok {
+			result = append(result, ag)
+			continue
+		}
+		lite := make(map[string]any, 3)
+		for _, k := range []string{"account_id", "group_id", "priority"} {
+			if v, ok := m[k]; ok {
+				lite[k] = v
+			}
+		}
+		// Trim nested group to {id,name}
+		if group, ok := m["group"]; ok {
+			if gm, ok := group.(map[string]any); ok {
+				glite := make(map[string]any, 2)
+				if id, ok := gm["id"]; ok {
+					glite["id"] = id
+				}
+				if name, ok := gm["name"]; ok {
+					glite["name"] = name
+				}
+				lite["group"] = glite
+			}
+		}
+		result = append(result, lite)
+	}
+	return result
+}
+
+// liteExtraKeys are the keys to keep from extra in lite mode.
+var liteExtraKeys = []string{
+	"privacy_mode", "email", "email_address",
+	"codex_primary_used_percent", "codex_5h_used_percent",
+	"codex_secondary_used_percent", "codex_7d_used_percent",
+}
+
+func liteTrimExtra(extra map[string]any) map[string]any {
+	lite := make(map[string]any, len(liteExtraKeys))
+	for _, k := range liteExtraKeys {
+		if v, ok := extra[k]; ok {
+			lite[k] = v
+		}
+	}
+	return lite
 }
 
 func requireAuth(w http.ResponseWriter, r *http.Request, manager *auth.Manager) bool {
@@ -2629,6 +2796,125 @@ func writeBatchAccountRefresh(w http.ResponseWriter, r *http.Request, siteServic
 	}
 	data, statusCode, err := siteService.AdminPOSTJSON(r.Context(), siteID, "/api/v1/admin/accounts/batch-refresh", map[string]any{
 		"account_ids": ids,
+	})
+	if err != nil {
+		writeSiteError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_, _ = w.Write(sanitizeJSONForBrowser(data))
+}
+
+// writeBatchUsage proxies a batch usage query to sub2api.
+// POST /api/sites/:id/accounts/usage/batch
+// Body: { "account_ids": [1,2,...], "source": "passive"|"active" }
+func writeFilteredAccountIDs(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
+	// Server-side ID collection: paginate through accounts with lite=1
+	// and return only the IDs. This avoids sending large account objects to the browser.
+	var input struct {
+		Page     int `json:"page"`     // starting page (1-based), 0 means 1
+		PageSize int `json:"pageSize"` // items per page, 0 means 100
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if input.Page <= 0 {
+		input.Page = 1
+	}
+	if input.PageSize <= 0 || input.PageSize > 200 {
+		input.PageSize = 100
+	}
+
+	// Forward upstream query params from the request URL
+	query := r.URL.Query()
+	query.Set("lite", "1")
+	query.Del("page")
+	query.Del("page_size")
+
+	ids := make([]int64, 0)
+	total := 0
+	page := input.Page
+
+	for {
+		query.Set("page", strconv.Itoa(page))
+		query.Set("page_size", strconv.Itoa(input.PageSize))
+
+		data, statusCode, err := siteService.AdminGET(r.Context(), siteID, "/api/v1/admin/accounts", query)
+		if err != nil {
+			writeSiteError(w, err)
+			return
+		}
+		if statusCode != 200 {
+			writeError(w, statusCode, "upstream returned non-200")
+			return
+		}
+
+		var root struct {
+			Data struct {
+				Items []struct {
+					ID int64 `json:"id"`
+				} `json:"items"`
+				Total int `json:"total"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(data, &root); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to parse upstream response")
+			return
+		}
+
+		for _, item := range root.Data.Items {
+			if item.ID > 0 {
+				ids = append(ids, item.ID)
+			}
+		}
+		total = root.Data.Total
+
+		if len(root.Data.Items) == 0 {
+			break
+		}
+		if total > 0 && page*input.PageSize >= total {
+			break
+		}
+		if len(root.Data.Items) < input.PageSize {
+			break
+		}
+		page++
+	}
+
+	slog.InfoContext(r.Context(), "filtered IDs collected", "site_id", siteID, "total_ids", len(ids), "total_accounts", total, "pages", page-input.Page+1)
+	writeJSON(w, http.StatusOK, map[string]any{"ids": ids, "total": total})
+}
+
+func writeBatchUsage(w http.ResponseWriter, r *http.Request, siteService *sites.Service, siteID int64) {
+	var input struct {
+		AccountIDs []int64 `json:"account_ids"`
+		Source     string   `json:"source,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	ids := make([]int64, 0, len(input.AccountIDs))
+	seen := make(map[int64]bool, len(input.AccountIDs))
+	for _, id := range input.AccountIDs {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"usage": map[string]any{}})
+		return
+	}
+	if len(ids) > 200 {
+		ids = ids[:200]
+	}
+	data, statusCode, err := siteService.AdminPOSTJSON(r.Context(), siteID, "/api/v1/admin/accounts/usage/batch", map[string]any{
+		"account_ids": ids,
+		"source":      input.Source,
 	})
 	if err != nil {
 		writeSiteError(w, err)
